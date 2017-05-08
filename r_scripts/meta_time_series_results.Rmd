@@ -1,0 +1,48 @@
+---
+title: "Meta Time Series Analysis"
+author: "Ryan_Gan"
+date: "May 8, 2017"
+output: html_document
+---
+
+## Background
+
+This is a pooled analysis of state and year specific time-series evaluating the association between wildfire smoke exposure and cardipulmonary outcomes in the Western United States. 
+
+### Notable differences between Washington and Oregon:
+
+*Health Data:* Washington CHARS data captures persons who visited a hosptial in the state. Oregon data is insurance based and captures insured persons billed for a medical visit in the state of Oregon. 
+
+*Smoke Data:* Washington smoke estimates were in general more accurate when compared with surface monitor estimates comapred to Oregon.
+
+```{r libaries, message = F, warning = F}
+library(tidyverse)
+```
+
+Read in meta time series data.
+
+```{r read data, message = F, warning = F}
+meta_ts <- read_csv("./data/meta_timeseries.csv")
+summary(meta_ts)
+```
+
+## Descriptives
+
+First step is to determine if there are any notable differences between the states. Going to aggregate counties by state (averaging health outcomes and smoke) and split states to Washington and Oregon.
+
+```{r data wrangle, message = F, warning = F}
+# washington
+wa_ts <- meta_ts %>% filter(state == "WA")
+# oregon
+or_ts <- meta_ts %>% filter(state == "OR")
+
+# averaged state aggregate
+state_avg_ts <- meta_ts %>% group_by(state, date) %>% 
+  # remove columns I don't want to calculate
+  select(-fips, -county) %>% 
+  # add up outcomes in each county
+  summarise()
+
+glimpse(meta_ts)
+.cols
+```
