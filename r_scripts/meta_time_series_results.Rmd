@@ -17,6 +17,7 @@ This is a pooled analysis of state and year specific time-series evaluating the 
 
 ```{r libaries, message = F, warning = F}
 library(tidyverse)
+library(lme4)
 ```
 
 Read in meta time series data.
@@ -26,7 +27,7 @@ meta_ts <- read_csv("./data/meta_timeseries.csv")
 summary(meta_ts)
 ```
 
-## Descriptives
+## Descriptive Plots
 
 First step is to determine if there are any notable differences between the states. Going to aggregate counties by state (averaging health outcomes and smoke) and split states to Washington and Oregon.
 
@@ -55,9 +56,9 @@ state_ts <- meta_ts %>% group_by(state, date) %>%
 
 ### Visualizing Exposure Time Series
 
-Small multiple sof counties within each state.
+Small multiples of counties within each state.
 
-*Washington 2012*
+####Washington 2012 Smoke Time Series
 
 ```{r washington smoke, message = F, warning = F, results = "asis"}
 
@@ -79,7 +80,7 @@ wa_smk_plot
 
 ```
 
-*Oregon 2013*
+####Oregon 2013 Smoke Time Series
 
 ```{r oregon smoke, message = F, warning = F, results = "asis"}
 
@@ -105,7 +106,7 @@ Seems like the southwest portion of Oregon was affected by smoke where the rest 
 
 ### Visualizing Health Outcome Time Series
 
-*Washington*
+###Washington Health Outcomes Time Series
 
 ```{r wash health, warning=F, message=F, results='asis'}
 glimpse(wa_ts)
@@ -151,5 +152,28 @@ count_plot <- ggplot(or_health, aes(x=date, y=events)) +
   theme_bw()
 
 count_plot
+
+```
+
+### Scatter Plot of Rate and Geo Smoke
+
+```{r scatter plot, message=F, warning=F, results="asis"}
+ggplot(meta_ts, aes(x = wrf_smk_pm, y = log(asthma_n/population))) +
+  geom_point(aes(colour = state)) +
+  geom_smooth(method="glm", formula = y~x)
+
+```
+
+
+
+```{r crude analysis, message=F warning=F, results="asis"}
+glimpse(meta_ts)
+
+quasipois_mod <- glmer(asthma_n ~ geo_wt_pm + wrf_temp + 
+                     (1|county) + (1 | state) +
+                     offset(log(population)), 
+                     meta_ts, family="poisson")
+
+summary(quasipois_mod)
 
 ```
