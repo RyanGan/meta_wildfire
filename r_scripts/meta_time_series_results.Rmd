@@ -36,13 +36,120 @@ wa_ts <- meta_ts %>% filter(state == "WA")
 # oregon
 or_ts <- meta_ts %>% filter(state == "OR")
 
-# averaged state aggregate
-state_avg_ts <- meta_ts %>% group_by(state, date) %>% 
+# count of state outcome timeseries
+state_outcome_count <- meta_ts %>% group_by(state, date) %>% 
   # remove columns I don't want to calculate
   select(-fips, -county) %>% 
   # add up outcomes in each county
-  summarise()
+  summarise_each(funs(sum), n_obs:broken_arm_n)
 
-glimpse(meta_ts)
-.cols
+# average of environmental measures, joined with outcomes
+state_ts <- meta_ts %>% group_by(state, date) %>% 
+  select(-fips, -county) %>% 
+  summarise_each(funs(mean, median, min, max), wrf_pm:wrf_temp) %>% 
+  full_join(state_outcome_count, by = c("state", "date"))
+
+#summary(state_ts)
+
+```
+
+### Visualizing Exposure Time Series
+
+Small multiple sof counties within each state.
+
+*Washington 2012*
+
+```{r washington smoke, message = F, warning = F, results = "asis"}
+
+# small multiples dataset
+wa_smk <- wa_ts %>% 
+  select(county, date, wrf_smk_pm, krig_smk_pm, geo_smk_pm) %>% 
+  gather(key = smk_method, value = pm, -date, - county)
+  
+  
+wa_smk_plot <- ggplot(wa_smk, aes(x = date, y = pm)) +
+  geom_point(aes(colour = smk_method), alpha = 0.8, size = 0.8) +
+  ggtitle("Washington: 2012 Fire Season Smoke PM2.5") +
+  facet_wrap(~county) +
+  ylab("Smoke PM2.5") +
+  xlab("Year:2012") +
+  theme_bw()
+
+wa_smk_plot
+
+```
+
+*Oregon 2013*
+
+```{r oregon smoke, message = F, warning = F, results = "asis"}
+
+# small multiples dataset
+or_smk <- or_ts %>% 
+  select(county, date, wrf_smk_pm, krig_smk_pm, geo_smk_pm) %>% 
+  gather(key = smk_method, value = pm, -date, - county)
+  
+  
+or_smk_plot <- ggplot(or_smk, aes(x = date, y = pm)) +
+  geom_point(aes(colour = smk_method), alpha = 0.8, size = 0.8) +
+  facet_wrap(~county) +
+  ggtitle("Oregon: 2013 Fire Season Smoke PM2.5") +
+  ylab("Smoke PM2.5") +
+  xlab("Year:2013") +
+  theme_bw()
+
+or_smk_plot
+
+```
+
+Seems like the southwest portion of Oregon was affected by smoke where the rest of the state did not have much smoke exposure. The smoke exposure timeframe also appears to have a smaller window of time on which it affected the area.
+
+### Visualizing Health Outcome Time Series
+
+*Washington*
+
+```{r wash health, warning=F, message=F, results='asis'}
+glimpse(wa_ts)
+# small multiples dataset
+wa_health <- wa_ts %>% 
+  select(county, date, population, n_obs:broken_arm_n) %>% 
+  gather(key = outcome, value = events, -date, -county, -population) %>% 
+  mutate(rate_per_100k = (events/population)*100000) %>% 
+  filter(outcome == "resp_n" | outcome == "cvd_n")
+
+#glimpse(wa_health)
+
+# plot of rates
+count_plot <- ggplot(wa_health, aes(x=date, y=events)) +
+  geom_point(aes(colour = outcome), alpha = 0.8, size = 0.8) +
+  facet_wrap(~county, scales = "free") +
+  ggtitle("Washington: 2012 Fire Season Respiratory and CVD Rates") +
+  ylab("Rates Per 100k") +
+  xlab("Year:2012") +
+  theme_bw()
+
+count_plot
+```
+
+
+*Oregon*
+
+```{r oregon health, message=F, warning=F, results='asis'}
+# small multiples dataset
+or_health <- or_ts %>% 
+  select(county, date, population, n_obs:broken_arm_n) %>% 
+  gather(key = outcome, value = events, -date, -county, -population) %>% 
+  mutate(rate_per_100k = (events/population)*100000) %>% 
+  filter(outcome == "resp_n" | outcome == "cvd_n")
+
+# plot of rates
+count_plot <- ggplot(or_health, aes(x=date, y=events)) +
+  geom_point(aes(colour = outcome), alpha = 0.8, size = 0.8) +
+  facet_wrap(~county, scales = "free") +
+  ggtitle("Oregon: 2013 Fire Season Respiratory and CVD Rates") +
+  ylab("Rates Per 100k") +
+  xlab("Year:2013") +
+  theme_bw()
+
+count_plot
+
 ```
