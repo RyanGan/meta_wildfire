@@ -23,8 +23,7 @@ library(lme4)
 Read in meta time series data.
 
 ```{r read data, message = F, warning = F}
-meta_ts <- read_csv("./data/meta_timeseries.csv")
-summary(meta_ts)
+meta_ts <- read_csv("./data/meta_timeseries.csv") 
 ```
 
 ## Descriptive Plots
@@ -155,12 +154,24 @@ count_plot
 
 ```
 
-### Scatter Plot of Rate and Geo Smoke
+### Scatter Plot of Outcome Rates and Geo Smoke PM 2.5
 
 ```{r scatter plot, message=F, warning=F, results="asis"}
-ggplot(meta_ts, aes(x = wrf_smk_pm, y = log(asthma_n/population))) +
+# calclating rates per 100k
+rate_df <- meta_ts %>% 
+  mutate_at(
+    which(colnames(meta_ts)=="n_obs"):which(colnames(meta_ts)=="broken_arm_n"),
+    funs((./population)*100000+0.1))
+
+summary(rate_df)
+
+
+ggplot(rate_df, aes(x = geo_wt_pm, y = asthma_n)) +
   geom_point(aes(colour = state)) +
+  scale_y_continuous(limits = c(0,2.5)) +
   geom_smooth(method="glm", formula = y~x)
+
+summary(meta_ts)
 
 ```
 
