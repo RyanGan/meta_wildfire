@@ -213,6 +213,8 @@ It looks like there is a linear relationship with smoke and asthma (expected), m
 
 ### Standard Regression Models
 
+Same-day estimates of association between smoke via GWR and outcomes.
+
 ```{r standard analysis, message=F warning=F, results="asis"}
 # create empty dataframe
 rr_df <- data.frame(matrix(nrow = 12, ncol = 4))
