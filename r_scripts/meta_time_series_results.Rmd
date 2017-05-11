@@ -18,12 +18,29 @@ This is a pooled analysis of state and year specific time-series evaluating the 
 ```{r libaries, message = F, warning = F}
 library(tidyverse)
 library(lme4)
+library(broom)
 ```
 
 Read in meta time series data.
 
 ```{r read data, message = F, warning = F}
-meta_ts <- read_csv("./data/meta_timeseries.csv") 
+meta_ts <- read_csv("./data/meta_timeseries.csv") %>% 
+  # creating 10 unit increase var of geo smoke and day of week
+  mutate(geo_smk10 = geo_smk_pm/10,
+         day = weekdays(date)) %>% 
+  # creating lag variables for a crude distributed lag
+  group_by(county) %>% 
+  mutate(geo_smk_lag1 = lag(geo_smk_pm, 1, order_by = county),
+         geo_smk_lag2 = lag(geo_smk_pm, 2, order_by = county),
+         geo_smk_lag3 = lag(geo_smk_pm, 3, order_by = county),
+         geo_smk_lag4 = lag(geo_smk_pm, 4, order_by = county),
+         geo_smk_lag5 = lag(geo_smk_pm, 5, order_by = county),
+         geo_smk_lag6 = lag(geo_smk_pm, 6, order_by = county),
+         geo_smk_lag7 = lag(geo_smk_pm, 7, order_by = county),
+         geo_smk_lag8 = lag(geo_smk_pm, 8, order_by = county),
+         geo_smk_lag9 = lag(geo_smk_pm, 9, order_by = county),
+         geo_smk_lag10 = lag(geo_smk_pm, 10, order_by = county))
+         
 ```
 
 ## Descriptive Plots
@@ -154,37 +171,132 @@ count_plot
 
 ```
 
-### Scatter Plot of Outcome Rates and Geo Smoke PM 2.5
+### Scatter Plot of Outcome Rates and Geo Smoke PM~2.5~
+
+Visualizing rates of outcomes by 10ug/m^3 increasing Geoweighted smoke PM~2.5~.
 
 ```{r scatter plot, message=F, warning=F, results="asis"}
 # calclating rates per 100k
-rate_df <- meta_ts %>% 
-  mutate_at(
+rate_df <- meta_ts %>% mutate_at(
     which(colnames(meta_ts)=="n_obs"):which(colnames(meta_ts)=="broken_arm_n"),
-    funs((./population)*100000+0.1))
+    funs((./population)*100000)) %>% 
+  mutate_at(c("wrf_smk_pm", "krig_smk_pm", "geo_smk_pm"),
+    funs(./10)) %>% 
+  select(state, county, date, geo_smk_pm,
+  which(colnames(meta_ts)=="n_obs"):
+  which(colnames(meta_ts)=="broken_arm_n")) %>% 
+  gather(key = outcome, value = rate_100k, -state, 
+         -county, -date, -geo_smk_pm) %>% 
+  filter(outcome != "n_obs")
+  
 
-summary(rate_df)
+# plot of pm2.5 every 10 units and asthma
+ggplot(rate_df, aes(x = geo_smk_pm, y = log(rate_100k+0.1))) +
+  geom_point(aes(colour = state), alpha = 0.2, , size = 1) + 
+  scale_colour_manual(values = c("red", "blue")) +
+  # truncated y axis
+  #scale_y_continuous(limits = c(0, 1.5)) +
+  # fit line for Washington
+  geom_smooth(data = filter(rate_df, state == "WA"), 
+              method=lm, formula = y~x, se = F, colour = "blue") +
+  # fit line for Oregon
+  geom_smooth(data = filter(rate_df, state == "OR"),
+              method=lm, formula = y~x, se = F, colour = "red") +
+  facet_wrap(~outcome, scale  = "free") +
+  ylab("Log Outcome Rate per 100,000 Persons") +
+  xlab("GWR Smoke PM2.5 per 10ug/m^3") +
+  theme_bw()  
 
+```
 
-ggplot(rate_df, aes(x = geo_wt_pm, y = asthma_n)) +
-  geom_point(aes(colour = state)) +
-  scale_y_continuous(limits = c(0,2.5)) +
-  geom_smooth(method="glm", formula = y~x)
+It looks like there is a linear relationship with smoke and asthma (expected), maybe with cerebrovascular disease, COPD, and respiratory outcomes.
 
-summary(meta_ts)
+### Standard Regression Models
+
+```{r standard analysis, message=F warning=F, results="asis"}
+# create empty dataframe
+rr_df <- data.frame(matrix(nrow = 12, ncol = 4))
+colnames(rr_df) <- c("outcome", "rel_risk", "lower_95", "upper_95")
+
+# vector of outcomes
+outcome_list <- colnames(meta_ts[, which(colnames(meta_ts)=="resp_n"):
+    which(colnames(meta_ts)=="broken_arm_n")])
+
+# names 
+outcome_names <- c('All Respiratory', 'Asthma', 'COPD', 'Pneumonia', 
+  'Acute Bronchitis', 'Cardiovascular Disease', 'Arrhythmia', 
+  'Cerebrovascular Disease', 'Heart Failure', 'Ischemic Heart Disease',
+  'Myocardial Infarction', 'Broken Arm')
+
+# populate outcome column
+rr_df[,1] <- factor(outcome_names, levels=unique(outcome_names))
+
+meow <- lapply(outcome_list, function(x){
+
+ smk_est <- tidy(glm(as.formula(paste0(x, 
+    "~ geo_smk10 + wrf_temp + state + county + 
+    day + offset(log(population))")), 
+    meta_ts, family="quasipoisson"))[2, ]
+ 
+ rr <- c(round(exp(smk_est[1,2]),3),
+         round(exp(smk_est[1,2]-1.96*smk_est[1,3]),3),
+         round(exp(smk_est[1,2]+1.96*smk_est[1,3]),3))
+ 
+}) # end apply
+
+for(i in 1:nrow(rr_df)){
+  rr_df[i,2:4] <- meow[[i]]
+}
+
+# add in a grouping variable
+rr_df$group <- NA
+rr_df[1:5, 5] <- "Respiratory"
+rr_df[6:11, 5] <- "CVD"
+rr_df[12, 5] <- "Broken Arm"
+
+# tried apply function and it might have been easier to just use a loop
+# as I needed a for loop to fill the list in to the dataframe
+# code is more compact though
+# I should check speed (or make a custom function to do this one day)
+
+ggplot(rr_df, aes(x=outcome, y = rel_risk, colour = group)) +
+  geom_point() +
+  geom_errorbar(aes(ymin=lower_95, ymax=upper_95), width = 0.2) +
+  geom_hline(yintercept = 1, linetype = 2, colour = "red") +
+  theme(
+   panel.background = element_rect(fill = 'white', colour = 'black'),
+   panel.grid.major = element_blank(),
+   panel.grid.minor = element_blank(),
+   axis.text.x = element_text(angle = 90, vjust = .75)) +
+  ylab("Relative Risk") +
+  xlab("Outcome") +
+  ggtitle("Relative Risk for a 10ug/m^3 increase PM2.5 estimated via GWR Smoke")
+  
+
+```
+
+### Mixed Model
+
+```{r mixed mod analysis, message=F warning=F, results="asis"}
+mixed_mod <- glmer(asthma_n ~ geo_smk10 + wrf_temp + (1|day) +
+                     (1|county) + (1|state) +
+                     offset(log(population)), 
+                     meta_ts, family="poisson")
+
+summary(mixed_mod)
 
 ```
 
 
+### Distributed Lag With Covariates in Model
 
-```{r crude analysis, message=F warning=F, results="asis"}
-glimpse(meta_ts)
+This is likely not ideal, but may be a start
 
-quasipois_mod <- glmer(asthma_n ~ geo_wt_pm + wrf_temp + 
-                     (1|county) + (1 | state) +
-                     offset(log(population)), 
-                     meta_ts, family="poisson")
+```{r mixed mod analysis, message=F warning=F, results="asis"}
+dis_lag_mod <- glmer(arrythmia_n ~ geo_smk_lag1 + geo_smk10 + 
+  wrf_temp + (1|day) + (1|county) + (1|state) +  
+  offset(log(population)), meta_ts, family="poisson")
 
-summary(quasipois_mod)
+summary(dis_lag_mod)
 
 ```
