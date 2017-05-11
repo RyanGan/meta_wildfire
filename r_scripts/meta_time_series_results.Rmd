@@ -192,7 +192,7 @@ rate_df <- meta_ts %>% mutate_at(
 
 # plot of pm2.5 every 10 units and asthma
 ggplot(rate_df, aes(x = geo_smk_pm, y = log(rate_100k+0.1))) +
-  geom_point(aes(colour = state), alpha = 0.2, , size = 1) + 
+  geom_point(aes(colour = state), alpha = 0.2,  size = 1) + 
   scale_colour_manual(values = c("red", "blue")) +
   # truncated y axis
   #scale_y_continuous(limits = c(0, 1.5)) +
