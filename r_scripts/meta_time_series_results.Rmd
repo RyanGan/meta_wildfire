@@ -24,7 +24,7 @@ library(broom)
 Read in meta time series data.
 
 ```{r read data, message = F, warning = F}
-meta_ts <- read_csv("./data/meta_timeseries.csv") %>% 
+meta_ts <- read_csv("../data/meta_timeseries.csv") %>% 
   # creating 10 unit increase var of geo smoke and day of week
   mutate(geo_smk10 = geo_smk_pm/10,
          day = weekdays(date)) %>% 
@@ -215,7 +215,7 @@ It looks like there is a linear relationship with smoke and asthma (expected), m
 
 Same-day estimates of association between smoke via GWR and outcomes.
 
-```{r standard analysis, message=F warning=F, results="asis"}
+```{r standard analysis, message=F, warning=F, results="asis"}
 # create empty dataframe
 rr_df <- data.frame(matrix(nrow = 12, ncol = 4))
 colnames(rr_df) <- c("outcome", "rel_risk", "lower_95", "upper_95")
@@ -277,7 +277,7 @@ ggplot(rr_df, aes(x=outcome, y = rel_risk, colour = group)) +
 
 ### Mixed Model
 
-```{r mixed mod analysis, message=F warning=F, results="asis"}
+```{r mixed mod analysis, message=F, warning=F, results="asis", eval = F}
 mixed_mod <- glmer(asthma_n ~ geo_smk10 + wrf_temp + (1|day) +
                      (1|county) + (1|state) +
                      offset(log(population)), 
@@ -292,7 +292,7 @@ summary(mixed_mod)
 
 This is likely not ideal, but may be a start
 
-```{r mixed mod analysis, message=F warning=F, results="asis"}
+```{r mixed mod2  analysis, message=F, warning=F, results="asis", eval = F}
 dis_lag_mod <- glmer(arrythmia_n ~ geo_smk_lag1 + geo_smk10 + 
   wrf_temp + (1|day) + (1|county) + (1|state) +  
   offset(log(population)), meta_ts, family="poisson")
