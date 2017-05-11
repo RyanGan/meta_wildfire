@@ -271,8 +271,6 @@ ggplot(rr_df, aes(x=outcome, y = rel_risk, colour = group)) +
   ylab("Relative Risk") +
   xlab("Outcome") +
   ggtitle("Relative Risk for a 10ug/m^3 increase PM2.5 estimated via GWR Smoke")
-  
-
 ```
 
 ### Mixed Model
