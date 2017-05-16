@@ -15,6 +15,8 @@ This is a pooled analysis of state and year specific time-series evaluating the 
 
 *Smoke Data:* Washington smoke estimates were in general more accurate when compared with surface monitor estimates comapred to Oregon.
 
+Both state datasets were limited to only emergency room visits (billed for Oregon, observed for Washington).
+
 ```{r libaries, message = F, warning = F}
 library(tidyverse)
 library(lme4)
@@ -24,13 +26,19 @@ library(broom)
 Read in meta time series data.
 
 ```{r read data, message = F, warning = F}
-meta_ts <- read_csv("../data/meta_timeseries.csv") %>% 
+meta_ts <- read_csv("./data/meta_timeseries.csv") %>% 
   # creating 10 unit increase var of geo smoke and day of week
   mutate(geo_smk10 = geo_smk_pm/10,
          day = weekdays(date)) %>% 
   # creating lag variables for a crude distributed lag
   group_by(county) %>% 
-  mutate(geo_smk_lag1 = lag(geo_smk_pm, 1, order_by = county),
+  # create smoke and lag variables
+  mutate(smoke0 = ifelse(geo_smk_pm > 0, 1, 0),
+         smoke5 = ifelse(geo_smk_pm > 5, 1, 0),
+         smoke10 = ifelse(geo_smk_pm > 10, 1, 0),
+         smoke15 = ifelse(geo_smk_pm > 15, 1, 0), 
+         # lag variables
+         geo_smk_lag1 = lag(geo_smk_pm, 1, order_by = county),
          geo_smk_lag2 = lag(geo_smk_pm, 2, order_by = county),
          geo_smk_lag3 = lag(geo_smk_pm, 3, order_by = county),
          geo_smk_lag4 = lag(geo_smk_pm, 4, order_by = county),
@@ -39,8 +47,42 @@ meta_ts <- read_csv("../data/meta_timeseries.csv") %>%
          geo_smk_lag7 = lag(geo_smk_pm, 7, order_by = county),
          geo_smk_lag8 = lag(geo_smk_pm, 8, order_by = county),
          geo_smk_lag9 = lag(geo_smk_pm, 9, order_by = county),
-         geo_smk_lag10 = lag(geo_smk_pm, 10, order_by = county))
-         
+         geo_smk_lag10 = lag(geo_smk_pm, 10, order_by = county)) %>% 
+  ungroup()
+
+# smoke wave days (at least 2 consecutive days in the 98th percentile of PM)
+quantile(meta_ts$geo_wt_pm, probs = c(0.95,0.98,0.99, 0.999))
+# following Coco's smoke wave day, the 98th percentile for PM2.5 concentrations
+# would be >26.9
+
+smoke_wave <- meta_ts %>% 
+  select(state, county, date, geo_wt_pm) %>% 
+  mutate(high_pm_day = ifelse(geo_wt_pm > 26.9, 1, 0)) %>% 
+  group_by(state, county) %>% 
+  # identify consecutive days
+  mutate(smoke_wave = ifelse(lag(high_pm_day, 
+    order_by = county)==1 & high_pm_day ==1, 1, 0)) %>% 
+  select(-high_pm_day, -geo_wt_pm)
+
+# merge in smokewave day
+meta_ts <- meta_ts %>% 
+  right_join(smoke_wave, by = c("state", "county", "date"))
+
+
+```
+
+### Incorporated the smoke-wave day approach by Coco Liu
+
+Comparing smoke-wave approach to our method of defining smoke days
+
+```{r smoke days, message=F, warning=F}
+# only 150 smoke wave days
+xtabs(~smoke_wave,  meta_ts)
+# if we compare to our geo smoke > 10, we'd add 362 extra days
+xtabs(~smoke_wave + smoke10, meta_ts)
+# if we used smoke >15 we'd add 164 extra days 
+xtabs(~smoke_wave + smoke15, meta_ts)
+
 ```
 
 ## Descriptive Plots
@@ -48,31 +90,31 @@ meta_ts <- read_csv("../data/meta_timeseries.csv") %>%
 First step is to determine if there are any notable differences between the states. Going to aggregate counties by state (averaging health outcomes and smoke) and split states to Washington and Oregon.
 
 ```{r data wrangle, message = F, warning = F}
+
 # washington
 wa_ts <- meta_ts %>% filter(state == "WA")
 # oregon
 or_ts <- meta_ts %>% filter(state == "OR")
 
 # count of state outcome timeseries
-state_outcome_count <- meta_ts %>% group_by(state, date) %>% 
+state_outcome_rate <- meta_ts %>% group_by(state, date) %>% 
   # remove columns I don't want to calculate
   select(-fips, -county) %>% 
   # add up outcomes in each county
-  summarise_each(funs(sum), n_obs:broken_arm_n)
+  summarise_each(funs(sum), population, n_obs:broken_arm_n) %>% 
+  mutate_each(funs((./population*100000)), n_obs:broken_arm_n) 
 
 # average of environmental measures, joined with outcomes
-state_ts <- meta_ts %>% group_by(state, date) %>% 
+state_smoke <- meta_ts %>% group_by(state, date) %>% 
   select(-fips, -county) %>% 
   summarise_each(funs(mean, median, min, max), wrf_pm:wrf_temp) %>% 
   full_join(state_outcome_count, by = c("state", "date"))
-
-#summary(state_ts)
 
 ```
 
 ### Visualizing Exposure Time Series
 
-Small multiples of counties within each state.
+Small multiples of smoke exposure series by smoke estimation method for each county within each state.
 
 ####Washington 2012 Smoke Time Series
 
@@ -88,8 +130,8 @@ wa_smk_plot <- ggplot(wa_smk, aes(x = date, y = pm)) +
   geom_point(aes(colour = smk_method), alpha = 0.8, size = 0.8) +
   ggtitle("Washington: 2012 Fire Season Smoke PM2.5") +
   facet_wrap(~county) +
-  ylab("Smoke PM2.5") +
-  xlab("Year:2012") +
+  ylab("Smoke PM2.5 ug/m^3") +
+  xlab("Year: 2012") +
   theme_bw()
 
 wa_smk_plot
@@ -103,15 +145,15 @@ wa_smk_plot
 # small multiples dataset
 or_smk <- or_ts %>% 
   select(county, date, wrf_smk_pm, krig_smk_pm, geo_smk_pm) %>% 
-  gather(key = smk_method, value = pm, -date, - county)
+  gather(key = smk_method, value = pm, -date, -county)
   
   
 or_smk_plot <- ggplot(or_smk, aes(x = date, y = pm)) +
   geom_point(aes(colour = smk_method), alpha = 0.8, size = 0.8) +
   facet_wrap(~county) +
   ggtitle("Oregon: 2013 Fire Season Smoke PM2.5") +
-  ylab("Smoke PM2.5") +
-  xlab("Year:2013") +
+  ylab("Smoke PM2.5 ug/m^3") +
+  xlab("Year: 2013") +
   theme_bw()
 
 or_smk_plot
@@ -121,6 +163,32 @@ or_smk_plot
 Seems like the southwest portion of Oregon was affected by smoke where the rest of the state did not have much smoke exposure. The smoke exposure timeframe also appears to have a smaller window of time on which it affected the area.
 
 ### Visualizing Health Outcome Time Series
+
+Comparison between Oregon and Washington aggregated health outcomes over time.
+
+```{r state outcome trends, message = F, warning = F, results = "asis"}
+# I want CVD and respiratory rates by each state so I can make a 4 panel
+state_cvd_resp <- state_outcome_rate %>% 
+  select(state, date, cvd_n, resp_n) %>% 
+  gather(key = outcome, value = n, -date, -state)
+  
+
+count_plot <- ggplot(state_cvd_resp, aes(x = date, y = n)) +
+  geom_point() +
+  facet_wrap(~state+outcome, scales = "free") +
+  ylab("Outcome Rate Per 100k Person") +
+  xlab("Date")
+  theme_bw()
+
+
+count_plot
+```
+
+CVD rates in Oregon for 2013 and Washington 2012 were similar, with no clear trend in the outcome rate over time. 
+
+All respiratory outcomes were slightly different between Washington and Oregon. It looks like Oregon has almost twice the respiratory ER rate compared to Washington. This could mean some difference in respiratory rates between states, or more likely could have something to do with the different data sources. I'll need to think about this more. Justifies accounting for state though. Also, both states appear to have trends in respiratory ER visits where there is a decline in summer months, with an increase in the rate around the fall. Oregon has a pretty pronounced seasonal variation. 
+
+It would be good to take a look at state-specific outcome time-series.
 
 ###Washington Health Outcomes Time Series
 
@@ -171,6 +239,8 @@ count_plot
 
 ```
 
+
+
 ### Scatter Plot of Outcome Rates and Geo Smoke PM~2.5~
 
 Visualizing rates of outcomes by 10ug/m^3 increasing Geoweighted smoke PM~2.5~.
@@ -182,11 +252,11 @@ rate_df <- meta_ts %>% mutate_at(
     funs((./population)*100000)) %>% 
   mutate_at(c("wrf_smk_pm", "krig_smk_pm", "geo_smk_pm"),
     funs(./10)) %>% 
-  select(state, county, date, geo_smk_pm,
+  select(state, county, date, geo_smk_pm, geo_wt_pm,
   which(colnames(meta_ts)=="n_obs"):
   which(colnames(meta_ts)=="broken_arm_n")) %>% 
   gather(key = outcome, value = rate_100k, -state, 
-         -county, -date, -geo_smk_pm) %>% 
+         -county, -date, -geo_smk_pm, -geo_wt_pm) %>% 
   filter(outcome != "n_obs")
   
 
@@ -275,10 +345,114 @@ ggplot(rr_df, aes(x=outcome, y = rel_risk, colour = group)) +
   ggtitle("Relative Risk for a 10ug/m^3 increase PM2.5 estimated via GWR Smoke")
 ```
 
+Smoke-wave associations with outcomes.
+
+```{r standard analysis smoke wave, message=F, warning=F, results="asis"}
+# create empty dataframe
+rr_df <- data.frame(matrix(nrow = 12, ncol = 4))
+colnames(rr_df) <- c("outcome", "rel_risk", "lower_95", "upper_95")
+
+# vector of outcomes
+outcome_list <- colnames(meta_ts[, which(colnames(meta_ts)=="resp_n"):
+    which(colnames(meta_ts)=="broken_arm_n")])
+
+# names 
+outcome_names <- c('All Respiratory', 'Asthma', 'COPD', 'Pneumonia', 
+  'Acute Bronchitis', 'Cardiovascular Disease', 'Arrhythmia', 
+  'Cerebrovascular Disease', 'Heart Failure', 'Ischemic Heart Disease',
+  'Myocardial Infarction', 'Broken Arm')
+
+# populate outcome column
+rr_df[,1] <- factor(outcome_names, levels=unique(outcome_names))
+
+meow <- lapply(outcome_list, function(x){
+
+ smk_est <- tidy(glm(as.formula(paste0(x, 
+    "~ smoke_wave + wrf_temp + state + county + 
+    day + offset(log(population))")), 
+    meta_ts, family="quasipoisson"))[2, ]
+ 
+ rr <- c(round(exp(smk_est[1,2]),3),
+         round(exp(smk_est[1,2]-1.96*smk_est[1,3]),3),
+         round(exp(smk_est[1,2]+1.96*smk_est[1,3]),3))
+ 
+}) # end apply
+
+for(i in 1:nrow(rr_df)){
+  rr_df[i,2:4] <- meow[[i]]
+}
+
+# add in a grouping variable
+rr_df$group <- NA
+rr_df[1:5, 5] <- "Respiratory"
+rr_df[6:11, 5] <- "CVD"
+rr_df[12, 5] <- "Broken Arm"
+
+# tried apply function and it might have been easier to just use a loop
+# as I needed a for loop to fill the list in to the dataframe
+# code is more compact though
+# I should check speed (or make a custom function to do this one day)
+
+ggplot(rr_df, aes(x=outcome, y = rel_risk, colour = group)) +
+  geom_point() +
+  geom_errorbar(aes(ymin=lower_95, ymax=upper_95), width = 0.2) +
+  geom_hline(yintercept = 1, linetype = 2, colour = "red") +
+  theme(
+   panel.background = element_rect(fill = 'white', colour = 'black'),
+   panel.grid.major = element_blank(),
+   panel.grid.minor = element_blank(),
+   axis.text.x = element_text(angle = 90, vjust = .75)) +
+  ylab("Relative Risk") +
+  xlab("Outcome") +
+  ggtitle("Relative risk for exposure to a smoke-wave")
+```
+
+### Crude Mediation
+
+```{r mediation}
+smk_pm <- lmer(geo_wt_pm ~ smoke_wave + wrf_temp + (1|day) +
+                     (1|county) + (1|state), meta_ts)
+# smoke is associated with higher pm2.5
+summary(smk_pm)
+
+# smoke is associated with asthma
+smk_asthma <- glmer(asthma_n ~ smoke_wave + wrf_temp + (1|day) +
+                     (1|county) + (1|state) +
+                     offset(log(population)), 
+                     meta_ts, family="poisson")
+summary(smk_asthma)
+
+# add in geo wt pm
+mediation <- glmer(asthma_n ~ smoke_wave + geo_wt_pm + 
+                     wrf_temp + (1|day) +
+                     (1|county) + (1|state) +
+                     offset(log(population)), 
+                     meta_ts, family="poisson")
+
+summary(mediation)
+
+
+```
+
+
+### Interaction Model
+
+```{r interaction}
+smoke_pm_int <- glmer(asthma_n ~ smoke15 + geo_wt_pm + smoke10:geo_wt_pm + 
+                     wrf_temp + (1|day) +
+                     (1|county) + (1|state) +
+                     offset(log(population)), 
+                     meta_ts, family="poisson")
+
+summary(smoke_pm_int)
+
+
+```
+
 ### Mixed Model
 
 ```{r mixed mod analysis, message=F, warning=F, results="asis", eval = F}
-mixed_mod <- glmer(asthma_n ~ geo_smk10 + wrf_temp + (1|day) +
+mixed_mod <- glmer(asthma_n ~ geo_wt_pm + wrf_temp + (1|day) +
                      (1|county) + (1|state) +
                      offset(log(population)), 
                      meta_ts, family="poisson")
@@ -292,8 +466,16 @@ summary(mixed_mod)
 
 This is likely not ideal, but may be a start
 
-```{r mixed mod2  analysis, message=F, warning=F, results="asis", eval = F}
-dis_lag_mod <- glmer(arrythmia_n ~ geo_smk_lag1 + geo_smk10 + 
+```{r asthma dist lag analysis, message=F, warning=F, results="asis", eval = F}
+# I need to concatnate the state and counties as there are some counties with
+# the same name in both states
+meta_ts2 <- meta_ts %>%
+  mutate(state_county = paste(state, county, sep = "_"))
+
+glimpse(meta_ts2$state_county)
+
+
+dis_lag_mod <- glmer(arrythmia_n ~ smoke_wave +
   wrf_temp + (1|day) + (1|county) + (1|state) +  
   offset(log(population)), meta_ts, family="poisson")
 
