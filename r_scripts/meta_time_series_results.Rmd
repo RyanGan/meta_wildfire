@@ -21,6 +21,10 @@ Both state datasets were limited to only emergency room visits (billed for Orego
 library(tidyverse)
 library(lme4)
 library(broom)
+# loading gganimate (David Robinson's package on Github)
+# still experimental and likely has some bugs
+library(gganimate)
+library(animation)
 ```
 
 Read in meta time series data.
@@ -71,7 +75,7 @@ meta_ts <- meta_ts %>%
 
 ```
 
-### Incorporated the smoke-wave day approach by Coco Liu
+I also incorporated the smoke-wave day approach by Coco Liu where I identified the 98th percentile of the observed PM2.5 values for the GWR estimates (without background PM2.5 subtracted off). Then I set the binary cutoff of at least two days of levels above this 98th percentile as a smoke wave day.
 
 Comparing smoke-wave approach to our method of defining smoke days
 
@@ -108,7 +112,7 @@ state_outcome_rate <- meta_ts %>% group_by(state, date) %>%
 state_smoke <- meta_ts %>% group_by(state, date) %>% 
   select(-fips, -county) %>% 
   summarise_each(funs(mean, median, min, max), wrf_pm:wrf_temp) %>% 
-  full_join(state_outcome_count, by = c("state", "date"))
+  full_join(state_outcome_rate, by = c("state", "date"))
 
 ```
 
@@ -116,7 +120,7 @@ state_smoke <- meta_ts %>% group_by(state, date) %>%
 
 Small multiples of smoke exposure series by smoke estimation method for each county within each state.
 
-####Washington 2012 Smoke Time Series
+#### Washington 2012 Smoke Time Series
 
 ```{r washington smoke, message = F, warning = F, results = "asis"}
 
@@ -138,7 +142,7 @@ wa_smk_plot
 
 ```
 
-####Oregon 2013 Smoke Time Series
+#### Oregon 2013 Smoke Time Series
 
 ```{r oregon smoke, message = F, warning = F, results = "asis"}
 
@@ -162,6 +166,185 @@ or_smk_plot
 
 Seems like the southwest portion of Oregon was affected by smoke where the rest of the state did not have much smoke exposure. The smoke exposure timeframe also appears to have a smaller window of time on which it affected the area.
 
+#### Maps of Number of Days Counties Affected by Smoke
+
+*Washington*
+
+```{r static wash smoke map, message=F, warning=F, results="asis"}
+
+# data wrangle ----
+#first step is to summarise the counts of smoke days in each county 
+wa_smk_count <- meta_ts %>% filter(state=="WA") %>% 
+  group_by(county) %>% 
+  # summing up smoke days
+  summarise(smk_wave_n = sum(smoke_wave), smk_day0 = sum(smoke0), 
+            smk_day5 = sum(smoke5), smk_day10 = sum(smoke10),
+            smk_day15 = sum(smoke15)) %>% 
+  # county needs to be lowercase to join to maps dataframe
+  mutate(county = tolower(county))
+
+# maps package will be loaded to pull map data and create a dataframe
+wa_county_df <- map_data("county", "washington")
+
+# join county counts to map df
+wa_smk_df <- wa_county_df %>% 
+  right_join(wa_smk_count, by = c("subregion" = "county")) %>% 
+  # small multiples of different smoke cutoff methods
+  gather(key = smk_cut_method, value = smoke_days, -long:-subregion) %>% 
+  # filter out smoke day 0 since it's not very specific
+  filter(smk_cut_method != "smk_day0") %>% 
+  # rename smoke day cutoffs 
+  mutate(smk_cut_method = 
+    ifelse(smk_cut_method == "smk_day5","Smoke PM2.5 > 5 ug/m^3",
+    ifelse(smk_cut_method == "smk_day10", "Smoke PM2.5 > 10 ug/m^3",
+    ifelse(smk_cut_method == "smk_day15", "Smoke PM2.5 > 15 ug/m^3",
+    ifelse(smk_cut_method == "smk_wave_n", "Smoke Wave", NA)))),
+    # preserve smoke method order for small multiple
+    smk_cut_method = factor(smk_cut_method, 
+      levels = c("Smoke PM2.5 > 5 ug/m^3", "Smoke PM2.5 > 10 ug/m^3", 
+                 "Smoke PM2.5 > 15 ug/m^3", "Smoke Wave")))
+
+# map ----
+
+# smoke days where GWR smoke > 15
+smoke_map <- ggplot(wa_smk_df, aes(x=long, y=lat, group=group)) +
+  # fill with number of smoke days
+  geom_polygon(aes(fill = smoke_days), alpha = 0.7) +
+  scale_fill_gradient("Smoke-Impacted Days",
+                      low = "#0b486b", high = "#f56217") +
+  # add county path on top
+  geom_path() +
+  facet_wrap(~smk_cut_method) +
+  xlab("Longitude") +
+  ylab("Latitude") +
+  ggtitle("Washington: Counties affected by smoke")
+  theme(panel.background = element_rect(fill = 'white', colour = 'black'),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    strip.background = element_rect(colour=NA, fill=NA))
+
+smoke_map
+
+```
+
+Attempting an animated plot. Doesn't seem to work on my PC for some reasons which I think has to do with the ImageMagick software. I'll figure it out later. 
+
+```{r animated wash smoke map, message=F, warning=F, results="asis", eval = F}
+
+# data wrangle ----
+wa_smk_days <- wa_ts %>% 
+  select(county, date, smoke5, smoke10, smoke15, smoke_wave) %>% 
+  # county needs to be lowercase to join to maps dataframe
+  mutate(county = tolower(county)) %>% 
+  # need to gather smoke variables by date
+  gather(key = smk_cut_method, value = smoke_days, -date, -county) %>% 
+  # maybe too many dates, going to filter to just september to october
+  filter(date >= "2012-09-15" & date <= "2012-10-01")
+  
+summary(wa_smk_days)
+# join county counts to map df
+wa_smk_df <- wa_county_df %>% 
+  right_join(wa_smk_days, by = c("subregion" = "county")) %>% 
+  filter(smk_cut_method != "smk_day0") %>% 
+  # rename smoke day cutoffs 
+  mutate(smk_cut_method = 
+    ifelse(smk_cut_method == "smoke5","Smoke PM2.5 > 5 ug/m^3",
+    ifelse(smk_cut_method == "smoke10", "Smoke PM2.5 > 10 ug/m^3",
+    ifelse(smk_cut_method == "smoke15", "Smoke PM2.5 > 15 ug/m^3",
+    ifelse(smk_cut_method == "smoke_wave", "Smoke Wave", NA)))),
+    # preserve smoke method order for small multiple
+    smk_cut_method = factor(smk_cut_method, 
+      levels = c("Smoke PM2.5 > 5 ug/m^3", "Smoke PM2.5 > 10 ug/m^3", 
+                 "Smoke PM2.5 > 15 ug/m^3", "Smoke Wave")))
+
+
+# map ----
+
+# smoke days where GWR smoke > 15
+smoke_map <- ggplot(wa_smk_df, aes(x=long, y=lat, group=group, frame = date)) +
+  # fill with number of smoke days
+  geom_polygon(aes(fill = smoke_days), alpha = 0.7) +
+  scale_fill_gradient("Smoke-Impacted Days",
+                      low = "#0b486b", high = "#f56217") +
+  # add county path on top
+  geom_path() +
+  facet_wrap(~smk_cut_method) +
+  xlab("Longitude") +
+  ylab("Latitude") +
+  theme(panel.background = element_rect(fill = 'white', colour = 'black'),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    strip.background = element_rect(colour=NA, fill=NA))
+
+gganimate(smoke_map, "output.gif")
+
+ggani
+ani.options()
+
+magickPath <-shortPathName("C:\\Program Files\\ImageMagick-7.0.5-Q16\\magick.exe")
+ani.options(convert=magickPath)
+```
+
+*Oregon*
+
+```{r static oregon smoke map, message=F, warning=F, results="asis"}
+
+# data wrangle ----
+#first step is to summarise the counts of smoke days in each county 
+or_smk_count <- meta_ts %>% filter(state=="OR") %>% 
+  group_by(county) %>% 
+  # summing up smoke days
+  summarise(smk_wave_n = sum(smoke_wave), smk_day0 = sum(smoke0), 
+            smk_day5 = sum(smoke5), smk_day10 = sum(smoke10),
+            smk_day15 = sum(smoke15)) %>% 
+  # county needs to be lowercase to join to maps dataframe
+  mutate(county = tolower(county))
+
+# maps package will be loaded to pull map data and create a dataframe
+or_county_df <- map_data("county", "oregon")
+
+# join county counts to map df
+or_smk_df <- or_county_df %>% 
+  right_join(or_smk_count, by = c("subregion" = "county")) %>% 
+  # small multiples of different smoke cutoff methods
+  gather(key = smk_cut_method, value = smoke_days, -long:-subregion) %>% 
+  # filter out smoke day 0 since it's not very specific
+  filter(smk_cut_method != "smk_day0") %>% 
+  # rename smoke day cutoffs 
+  mutate(smk_cut_method = 
+    ifelse(smk_cut_method == "smk_day5","Smoke PM2.5 > 5 ug/m^3",
+    ifelse(smk_cut_method == "smk_day10", "Smoke PM2.5 > 10 ug/m^3",
+    ifelse(smk_cut_method == "smk_day15", "Smoke PM2.5 > 15 ug/m^3",
+    ifelse(smk_cut_method == "smk_wave_n", "Smoke Wave", NA)))),
+    # preserve smoke method order for small multiple
+    smk_cut_method = factor(smk_cut_method, 
+      levels = c("Smoke PM2.5 > 5 ug/m^3", "Smoke PM2.5 > 10 ug/m^3", 
+                 "Smoke PM2.5 > 15 ug/m^3", "Smoke Wave")))
+
+# map ----
+
+# smoke days where GWR smoke > 15
+smoke_map <- ggplot(or_smk_df, aes(x=long, y=lat, group=group)) +
+  # fill with number of smoke days
+  geom_polygon(aes(fill = smoke_days), alpha = 0.7) +
+  scale_fill_gradient("Smoke-Impacted Days",
+                      low = "#0b486b", high = "#f56217") +
+  # add county path on top
+  geom_path() +
+  facet_wrap(~smk_cut_method) +
+  xlab("Longitude") +
+  ylab("Latitude") +
+  ggtitle("Oregon: Counties affected by smoke") +
+  theme(panel.background = element_rect(fill = 'white', colour = 'black'),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    strip.background = element_rect(colour=NA, fill=NA))
+
+smoke_map
+
+```
+
+
 ### Visualizing Health Outcome Time Series
 
 Comparison between Oregon and Washington aggregated health outcomes over time.
@@ -177,7 +360,7 @@ count_plot <- ggplot(state_cvd_resp, aes(x = date, y = n)) +
   geom_point() +
   facet_wrap(~state+outcome, scales = "free") +
   ylab("Outcome Rate Per 100k Person") +
-  xlab("Date")
+  xlab("Date") +
   theme_bw()
 
 
@@ -190,10 +373,10 @@ All respiratory outcomes were slightly different between Washington and Oregon. 
 
 It would be good to take a look at state-specific outcome time-series.
 
-###Washington Health Outcomes Time Series
+### Washington Health Outcomes Time Series
 
 ```{r wash health, warning=F, message=F, results='asis'}
-glimpse(wa_ts)
+
 # small multiples dataset
 wa_health <- wa_ts %>% 
   select(county, date, population, n_obs:broken_arm_n) %>% 
@@ -409,7 +592,7 @@ ggplot(rr_df, aes(x=outcome, y = rel_risk, colour = group)) +
 
 ### Crude Mediation
 
-```{r mediation}
+```{r mediation, eval = F}
 smk_pm <- lmer(geo_wt_pm ~ smoke_wave + wrf_temp + (1|day) +
                      (1|county) + (1|state), meta_ts)
 # smoke is associated with higher pm2.5
@@ -437,7 +620,7 @@ summary(mediation)
 
 ### Interaction Model
 
-```{r interaction}
+```{r interaction, message=F, warning=F, results="asis", eval = F}
 smoke_pm_int <- glmer(asthma_n ~ smoke15 + geo_wt_pm + smoke10:geo_wt_pm + 
                      wrf_temp + (1|day) +
                      (1|county) + (1|state) +
@@ -445,7 +628,6 @@ smoke_pm_int <- glmer(asthma_n ~ smoke15 + geo_wt_pm + smoke10:geo_wt_pm +
                      meta_ts, family="poisson")
 
 summary(smoke_pm_int)
-
 
 ```
 
@@ -470,15 +652,197 @@ This is likely not ideal, but may be a start
 # I need to concatnate the state and counties as there are some counties with
 # the same name in both states
 meta_ts2 <- meta_ts %>%
-  mutate(state_county = paste(state, county, sep = "_"))
+  mutate(state_county = paste(state, county, sep = "_")) %>% 
+  group_by(state_county) %>% 
+  # binary smoke lag >15
+  mutate(smk_lag1 = lag(smoke10, 1, order_by = state_county),
+         smk_lag2 = lag(smoke10, 2, order_by = state_county),
+         smk_lag3 = lag(smoke10, 3, order_by = state_county),
+         smk_lag4 = lag(smoke10, 4, order_by = state_county),
+         smk_lag5 = lag(smoke10, 5, order_by = state_county),
+         smk_lag6 = lag(smoke10, 6, order_by = state_county),
+         smk_lag7 = lag(smoke10, 7, order_by = state_county),
+         smk_lag8 = lag(smoke10, 8, order_by = state_county),
+         smk_lag9 = lag(smoke10, 9, order_by = state_county),
+        smk_lag10 = lag(smoke10, 10, order_by = state_county)) %>% 
+  # filter to counties with populatoin of at least 20k
+  filter(population >= 50000)
+  
 
-glimpse(meta_ts2$state_county)
+# simple distributed lag models
 
-
-dis_lag_mod <- glmer(arrythmia_n ~ smoke_wave +
+dis_lag_mod <- glmer(asthma_n ~ smoke10 +
   wrf_temp + (1|day) + (1|county) + (1|state) +  
   offset(log(population)), meta_ts, family="poisson")
 
 summary(dis_lag_mod)
 
+summary(glmer(asthma_n ~ smoke10 + smk_lag1 + smk_lag2 + smk_lag3 + smk_lag4 +
+             smk_lag5 + (1|day) + (1|county) + (1|state) + 
+             offset(log(population)), meta_ts2,
+             family="poisson"))
+
 ```
+
+
+```{r dist lag package}
+library(dlnm)
+library(mvmeta)
+
+# create vector of state_county
+counties <- as.character(unique(meta_ts2$state_county))
+
+# create dataframe list of each county
+county_list_df <- lapply(counties, function(x) 
+  meta_ts2[meta_ts2$state_county==x,])
+# assign each element of the list object the county name
+names(county_list_df) <- counties
+# calculate length of counties (75)
+m <- length(counties)
+
+# GWR PM2.5 ranges
+smk_range <- t(sapply(county_list_df, 
+  function(x) range(x$geo_smk10,na.rm=T)))
+smk_range
+
+# population range
+pop_range <- t(sapply(county_list_df, 
+  function(x) range(x$population,na.rm=T)))
+pop_range
+
+
+
+# -----
+
+# function to compute the QAIC (quasi-poisson AIC)
+fqaic <- function(model) {
+  loglik <- sum(dpois(model$y,model$fitted.values,log=TRUE))
+  phi <- summary(model)$dispersion
+  qaic <- -2*loglik + 2*summary(model)$df[3]*phi
+  return(qaic)
+}
+
+# attempting dl model with asthma
+
+# assuming linear relationship between smoke and outcomes
+argvar <- list(fun="lin")
+# fitting a natural spline for lag with 5 knots?
+arglag <- list(fun="ns", df=4)
+lag <- 7
+
+# build matrix where results will be stored
+# resp_all- matrix for outcome parameters
+# resp_cov_all - list of (co)variance matrices
+
+# overall cumulative summaries
+# need 4 columns for the 4 degrees of freedom for the spline
+asthma_all <- matrix(NA, length(county_list_df), 4, 
+  dimnames=list(counties,paste("b",seq(4),sep="")))
+
+# (co)variance matrices
+asthma_cov_all <- vector("list",length(county_list_df))
+names(asthma_cov_all) <- counties
+
+# qaic
+qaic_asthma <- 0
+
+# loop for each county
+
+system.time({
+for(i in seq(county_list_df)) {
+
+  # load county dataframe
+  sub <- county_list_df[[i]]
+
+  # define the cross-basis for smoke ----
+  suppressWarnings({
+  smk_cb <- crossbasis(sub$geo_smk10,
+                     lag=lag, argvar=argvar, arglag=arglag)
+  
+  temp_cb <- crossbasis(sub$wrf_temp, lag = lag, argvar = argvar,
+                        arglag = arglag)
+  
+  })
+
+
+  # run the first stage models
+  asthma_model <- glm(asthma_n ~ smk_cb + temp_cb + 
+                    offset(log(population)), 
+    family = "quasipoisson", sub)
+  
+
+  
+  # reduction to summary results ---
+  # prediction summary for smoke 10 ug/m^3 
+  suppressWarnings({
+    asthma_cr_all <- crossreduce(smk_cb, asthma_model, type = "var", value = 1)
+    
+
+  })
+
+
+  # store results in matrix ---
+  # daily lag results
+  asthma_all[i,] <- coef(asthma_cr_all)
+  asthma_cov_all[[i]] <- vcov(asthma_cr_all)
+  
+
+
+  # Q-AIC
+  qaic_asthma[i] <- fqaic(asthma_model)
+
+}
+})
+
+# grand q aic
+sum(qaic_asthma)
+
+# second stage ----
+# multivariate meta analysis
+
+# reml estimation method
+method <- "reml"
+
+# overall pooled summary for asthma model
+mv_asthma_all <- mvmeta(asthma_all~1, asthma_cov_all, method = method)
+
+summary(mv_asthma_all)
+
+# # meta summaries
+# summary(mv_resp_all)
+# summary(mv_cvd_all)
+
+# create bases for prediction ----
+
+# bases of smoke lag
+xlag <- 0:70/10
+blag <- do.call("onebasis",c(list(x=xlag),attr(smk_cb,"arglag")))
+
+# county-specific first stage summaries
+
+asthma_county_all <- apply(asthma_all,1, function(x) exp(blag%*%x))
+
+# prediction for a grid of lag days
+
+# predictor-specific summaries for 10 ug/m^3 of smoke
+asthma_cp_smk10 <- crosspred(blag, coef=coef(mv_asthma_all),
+                      vcov=vcov(mv_asthma_all),
+                      model.link="log", at = 0:70/10)
+
+# # summary stats for resp
+asthma_cp_smk10$allRRfit
+asthma_cp_smk10$allRRlow
+asthma_cp_smk10$allRRhigh
+
+# plot of asthma
+plot.crosspred(asthma_cp_smk10, type="n", ylim=c(.8, 1.2), ylab="RR", xlab="Lag")
+#matplot(xlag, resp_county_all, type="l", col=grey(0.5),lty=2,add=T)
+abline(h=1)
+lines(asthma_cp_smk10,col=2,lwd=2)
+legend ("top","Pooled (with 95%CI)",#,"First-stage region-specific"),
+  lty=c(1,2),lwd=1.5,col=c(2,grey(0.7)),bty="n",inset=0.1,cex=0.8)
+mtext(text=paste("10 ug/m^3 increase in GWR Smoke and Asthma ER"))
+
+```
+
+Had some convergence issues. I need to try and figure out a way to find the models that won't converge. Next step would be to try and better understand what's going on, and extend to other outcomes. Maybe look at effect modification by age (age strata)?
