@@ -21,6 +21,7 @@ Both state datasets were limited to only emergency room visits (billed for Orego
 library(tidyverse)
 library(lme4)
 library(broom)
+library(maps)
 # loading gganimate (David Robinson's package on Github)
 # still experimental and likely has some bugs
 #library(gganimate)
@@ -45,17 +46,14 @@ meta_ts <- read_csv("./data/meta_timeseries.csv") %>%
          smoke5 = ifelse(geo_smk_pm > 5, 1, 0),
          smoke10 = ifelse(geo_smk_pm > 10, 1, 0),
          smoke15 = ifelse(geo_smk_pm > 15, 1, 0), 
-         # lag variables
-         geo_smk_lag1 = lag(geo_smk_pm, 1, order_by = county),
-         geo_smk_lag2 = lag(geo_smk_pm, 2, order_by = county),
-         geo_smk_lag3 = lag(geo_smk_pm, 3, order_by = county),
-         geo_smk_lag4 = lag(geo_smk_pm, 4, order_by = county),
-         geo_smk_lag5 = lag(geo_smk_pm, 5, order_by = county),
-         geo_smk_lag6 = lag(geo_smk_pm, 6, order_by = county),
-         geo_smk_lag7 = lag(geo_smk_pm, 7, order_by = county),
-         geo_smk_lag8 = lag(geo_smk_pm, 8, order_by = county),
-         geo_smk_lag9 = lag(geo_smk_pm, 9, order_by = county),
-         geo_smk_lag10 = lag(geo_smk_pm, 10, order_by = county)) %>% 
+         # lag variable
+         geo_smk_lag1 = lag(geo_smk10, 1, order_by = county),
+         geo_smk_lag2 = lag(geo_smk10, 2, order_by = county),
+         geo_smk_lag3 = lag(geo_smk10, 3, order_by = county),
+         geo_smk_lag4 = lag(geo_smk10, 4, order_by = county),
+         geo_smk_lag5 = lag(geo_smk10, 5, order_by = county),
+         geo_smk_lag6 = lag(geo_smk10, 6, order_by = county),
+         geo_smk_lag7 = lag(geo_smk10, 7, order_by = county)) %>% 
   ungroup()
 
 # smoke wave days (at least 2 consecutive days in the 98th percentile of PM)
@@ -638,7 +636,7 @@ summary(smoke_pm_int)
 ### Mixed Model
 
 ```{r mixed mod analysis, message=F, warning=F, results="asis", eval = F}
-mixed_mod <- glmer(asthma_n ~ geo_wt_pm + wrf_temp + (1|day) +
+mixed_mod <- glmer(asthma_n ~ smoke_wave + wrf_temp + (1|day) +
                      (1|county) + (1|state) +
                      offset(log(population)), 
                      meta_ts, family="poisson")
@@ -679,25 +677,24 @@ dis_lag_mod <- glmer(asthma_n ~ smoke10 +
 
 summary(dis_lag_mod)
 
-summary(glmer(asthma_n ~ smoke10 + smk_lag1 + smk_lag2 + smk_lag3 + smk_lag4 +
+summary(glmer(hf_n ~ smoke10 + smk_lag1 + smk_lag2 + smk_lag3 + smk_lag4 +
              smk_lag5 + smk_lag6 + smk_lag7 + (1|day) + (1|county) + (1|state) + 
              offset(log(population)), meta_ts2,
              family="poisson"))
 
 # continous pm
-mixed_mod <- glmer(asthma_n ~ geo_smk_pm + geo_smk_lag1 + geo_smk_lag2 + 
+mixed_mod <- glmer(hf_n ~ geo_smk10 + geo_smk_lag1 + geo_smk_lag2 + 
   geo_smk_lag3 + geo_smk_lag4 + geo_smk_lag5 + geo_smk_lag6 + geo_smk_lag7 +
   (1|day) + (1|county) + (1|state) + offset(log(population)), meta_ts2,
   family="poisson" )#, control = glmerControl(optimizer = "bobyqa"))
 
-mixed_mod
+summary(mixed_mod)
 warnings(mixed_mod)
 
 ```
 
 
-```{r dist lag }
-
+```{r two stage distributed lag }
 
 # create vector of state_county
 counties <- as.character(unique(meta_ts2$state_county))
@@ -731,125 +728,127 @@ fqaic <- function(model) {
 
 # attempting dl model with asthma
 
+# setup -----
 # assuming linear relationship between smoke and outcomes
 argvar <- list(fun="lin")
 # fitting a natural spline for lag with 5 knots?
-arglag <- list(fun="ns", df=4)
+degree_freedom <- 5
+arglag <- list(fun="ns", df=degree_freedom)
+# I'm not certain on lag yet, but maybe a week makes sense
 lag <- 7
 
-# build matrix where results will be stored
-# resp_all- matrix for outcome parameters
-# resp_cov_all - list of (co)variance matrices
-
 # overall cumulative summaries
-# need 4 columns for the 4 degrees of freedom for the spline
-asthma_all <- matrix(NA, length(county_list_df), 4, 
-  dimnames=list(counties,paste("b",seq(4),sep="")))
+# columns need to match degrees of freedom for lag
+# 4 degrees of freedom for the spline
+cumulative_counties <- matrix(NA, length(county_list_df), 
+  as.numeric(degree_freedom), 
+  dimnames=list(counties,paste("b",seq(degree_freedom),sep="")))
+
+names(cumulative_counties) <- counties
 
 # (co)variance matrices
-asthma_cov_all <- vector("list",length(county_list_df))
-names(asthma_cov_all) <- counties
+counties_cov <- vector("list",length(county_list_df))
+names(counties_cov) <- counties
+
+
+# I also want to make a matrix of county-level models that fail to converge
+converge <- matrix(NA, length(county_list_df), 1,
+  dimnames=list(counties, "converge"))
 
 # qaic
-qaic_asthma <- 0
+qaic_val <- 0
 
+# first stage ----
 # loop for each county
-
 system.time({
 for(i in seq(county_list_df)) {
 
-  # load county dataframe
+  # load county-specific dataframe
   sub <- county_list_df[[i]]
 
-  # define the cross-basis for smoke ----
+  # define the cross-basis ----
   suppressWarnings({
-  smk_cb <- crossbasis(sub$geo_smk10,
-                     lag=lag, argvar=argvar, arglag=arglag)
-  
+    # cross-basis for smoke
+  smk_cb <- crossbasis(sub$geo_smk10,lag=lag,argvar=argvar,arglag=arglag)
+    # cross-basis for temp
   temp_cb <- crossbasis(sub$wrf_temp, lag = lag, argvar = argvar,
                         arglag = arglag)
-  
   })
-
-
-  # run the first stage models
-  asthma_model <- glm(asthma_n ~ smk_cb + temp_cb + 
-                    offset(log(population)), 
+  # run the first stage county-specific models
+  county_model <- glm(hf_n ~ smk_cb + temp_cb + offset(log(population)), 
     family = "quasipoisson", sub)
-  
 
+  # alert warning if there are convergence issues
+  converge[i,] <- county_model$converged
   
   # reduction to summary results ---
   # prediction summary for smoke 10 ug/m^3 
+  # uses cross reduce function
   suppressWarnings({
-    asthma_cr_all <- crossreduce(smk_cb, asthma_model, type = "var", value = 1)
-    
-
-  })
-
-
+    cr_counties <- crossreduce(smk_cb, county_model, type = "var", value = 1)
+  
+    })
+  
   # store results in matrix ---
   # daily lag results
-  asthma_all[i,] <- coef(asthma_cr_all)
-  asthma_cov_all[[i]] <- vcov(asthma_cr_all)
+  cumulative_counties[i,] <- coef(cr_counties)
+  counties_cov[[i]] <- vcov(cr_counties)
   
-
-
   # Q-AIC
-  qaic_asthma[i] <- fqaic(asthma_model)
+  qaic_val[i] <- fqaic(county_model)
 
 }
 })
 
 # grand q aic
-sum(qaic_asthma)
+sum(qaic_val)
 
 # second stage ----
 # multivariate meta analysis
+# first step is to reduce the county-specific matrix to those that converged
+meta_counties <- cumulative_counties[converge[]==T, ]
+# reduce covariance matrix to models that converged
+meta_cov <- counties_cov[converge[]==T]
 
 # reml estimation method
 method <- "reml"
 
 # overall pooled summary for asthma model
-mv_asthma_all <- mvmeta(asthma_all~1, asthma_cov_all, method = method)
+cumulative_mv_meta <- mvmeta(meta_counties~1, meta_cov, method = method)
 
-summary(mv_asthma_all)
-
-# # meta summaries
-# summary(mv_resp_all)
-# summary(mv_cvd_all)
+# meta summary of crossbasis
+summary(cumulative_mv_meta)
 
 # create bases for prediction ----
-
-# bases of smoke lag
+# bases of smoke lag (7 days with 10 intervals in each)
 xlag <- 0:70/10
 blag <- do.call("onebasis",c(list(x=xlag),attr(smk_cb,"arglag")))
 
 # county-specific first stage summaries
-
-asthma_county_all <- apply(asthma_all,1, function(x) exp(blag%*%x))
+county_lag_estimates <- apply(cumulative_counties,1, function(x) exp(blag%*%x))
 
 # prediction for a grid of lag days
-
 # predictor-specific summaries for 10 ug/m^3 of smoke
-asthma_cp_smk10 <- crosspred(blag, coef=coef(mv_asthma_all),
-                      vcov=vcov(mv_asthma_all),
-                      model.link="log", at = 0:70/10)
+pooled_cp <- crosspred(blag, coef=coef(cumulative_mv_meta), 
+  vcov=vcov(cumulative_mv_meta), model.link="log", at = xlag)
 
 # # summary stats for resp
-asthma_cp_smk10$allRRfit
-asthma_cp_smk10$allRRlow
-asthma_cp_smk10$allRRhigh
+pooled_cp$allRRfit
+pooled_cp$allRRlow
+pooled_cp$allRRhigh
 
 # plot of asthma
-plot.crosspred(asthma_cp_smk10, type="n", ylim=c(.8, 1.2), ylab="RR", xlab="Lag")
-#matplot(xlag, resp_county_all, type="l", col=grey(0.5),lty=2,add=T)
+plot.crosspred(pooled_cp, type="n", ylim=c(.8, 1.2), ylab="RR", xlab="Lag")
+# this chunk of code will plot the county-specific lags (but it's messy)
+# so i'm commenting out
+# matplot(xlag, county_lag_estimates, type="l", col=grey(0.5),lty=2,add=T)
 abline(h=1)
-lines(asthma_cp_smk10,col=2,lwd=2)
+lines(pooled_cp,col=2,lwd=2)
 legend ("top","Pooled (with 95%CI)",#,"First-stage region-specific"),
   lty=c(1,2),lwd=1.5,col=c(2,grey(0.7)),bty="n",inset=0.1,cex=0.8)
-mtext(text=paste("10 ug/m^3 increase in GWR Smoke and Asthma ER"))
+mtext(text=paste("Cumulative: 10 ug/m^3 increase in GWR Smoke and Outcome ER"))
 
+sum(qaic_val)
 ```
 
 Had some convergence issues. I need to try and figure out a way to find the models that won't converge. Next step would be to try and better understand what's going on, and extend to other outcomes. Maybe look at effect modification by age (age strata)?
