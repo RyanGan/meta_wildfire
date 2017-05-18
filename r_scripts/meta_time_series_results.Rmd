@@ -23,8 +23,12 @@ library(lme4)
 library(broom)
 # loading gganimate (David Robinson's package on Github)
 # still experimental and likely has some bugs
-library(gganimate)
-library(animation)
+#library(gganimate)
+#library(animation)
+
+# two-stage distributed lag model libraries
+library(dlnm)
+library(mvmeta)
 ```
 
 Read in meta time series data.
@@ -217,7 +221,7 @@ smoke_map <- ggplot(wa_smk_df, aes(x=long, y=lat, group=group)) +
   facet_wrap(~smk_cut_method) +
   xlab("Longitude") +
   ylab("Latitude") +
-  ggtitle("Washington: Counties affected by smoke")
+  ggtitle("Washington: Counties affected by smoke") +
   theme(panel.background = element_rect(fill = 'white', colour = 'black'),
     panel.grid.major = element_blank(),
     panel.grid.minor = element_blank(),
@@ -664,9 +668,7 @@ meta_ts2 <- meta_ts %>%
          smk_lag7 = lag(smoke10, 7, order_by = state_county),
          smk_lag8 = lag(smoke10, 8, order_by = state_county),
          smk_lag9 = lag(smoke10, 9, order_by = state_county),
-        smk_lag10 = lag(smoke10, 10, order_by = state_county)) %>% 
-  # filter to counties with populatoin of at least 20k
-  filter(population >= 50000)
+        smk_lag10 = lag(smoke10, 10, order_by = state_county))
   
 
 # simple distributed lag models
@@ -678,16 +680,24 @@ dis_lag_mod <- glmer(asthma_n ~ smoke10 +
 summary(dis_lag_mod)
 
 summary(glmer(asthma_n ~ smoke10 + smk_lag1 + smk_lag2 + smk_lag3 + smk_lag4 +
-             smk_lag5 + (1|day) + (1|county) + (1|state) + 
+             smk_lag5 + smk_lag6 + smk_lag7 + (1|day) + (1|county) + (1|state) + 
              offset(log(population)), meta_ts2,
              family="poisson"))
+
+# continous pm
+mixed_mod <- glmer(asthma_n ~ geo_smk_pm + geo_smk_lag1 + geo_smk_lag2 + 
+  geo_smk_lag3 + geo_smk_lag4 + geo_smk_lag5 + geo_smk_lag6 + geo_smk_lag7 +
+  (1|day) + (1|county) + (1|state) + offset(log(population)), meta_ts2,
+  family="poisson" )#, control = glmerControl(optimizer = "bobyqa"))
+
+mixed_mod
+warnings(mixed_mod)
 
 ```
 
 
-```{r dist lag package}
-library(dlnm)
-library(mvmeta)
+```{r dist lag }
+
 
 # create vector of state_county
 counties <- as.character(unique(meta_ts2$state_county))
@@ -709,9 +719,6 @@ smk_range
 pop_range <- t(sapply(county_list_df, 
   function(x) range(x$population,na.rm=T)))
 pop_range
-
-
-
 # -----
 
 # function to compute the QAIC (quasi-poisson AIC)
