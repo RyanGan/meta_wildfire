@@ -24,7 +24,7 @@ library(broom)
 Read in meta time series data.
 
 ```{r read data, message = F, warning = F}
-meta_ts <- read_csv("../data/meta_timeseries.csv") %>% 
+meta_ts <- read_csv("./data/meta_timeseries.csv") %>% 
   # creating 10 unit increase var of geo smoke and day of week
   mutate(geo_smk10 = geo_smk_pm/10,
          day = weekdays(date)) %>% 
