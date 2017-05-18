@@ -719,9 +719,6 @@ smk_range
 pop_range <- t(sapply(county_list_df, 
   function(x) range(x$population,na.rm=T)))
 pop_range
-
-
-
 # -----
 
 # function to compute the QAIC (quasi-poisson AIC)
