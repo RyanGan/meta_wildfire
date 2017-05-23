@@ -691,7 +691,8 @@ lag <- 7
 outcome_names <- colnames(meta_ts[,which(colnames(meta_ts)=="resp_n"):
   which(colnames(meta_ts)=="broken_arm_n")])
 # copd is having issues; i suspect counties with no events is the problem
-
+# empty vector to fill with error messages of counties where models can be run
+# mostly due to no variation in the outcome (i.e. all 0s in the time series)
 
 fit_matrix <- matrix(NA, nrow=0, ncol=6)
 colnames(fit_matrix) <- c("outcome", "exposure", "fit_type", "df", "aic",
@@ -733,17 +734,18 @@ fit_mat <- matrix(NA, nrow = 3, ncol = 6)
     
     # qaic
     qaic_val <- 0
-    
+
     # first stage ----
     # loop for each county
     for(i in seq(county_list_df)) {
-
+      # if error in following code, move on to next county
+      tryCatch({
       # load county-specific dataframe
       sub <- county_list_df[[i]]
       
       # run only if there is at least one observation of outcome in ts
-      if(max(sub[, which(colnames(sub)==outcome_names[[q]])]) > 1){
-      
+      #if(max(sub[, which(colnames(sub)==outcome_names[[q]])]) > 2){
+
       # define the cross-basis ----
       suppressWarnings({
       # cross-basis for smoke
@@ -752,6 +754,7 @@ fit_mat <- matrix(NA, nrow = 3, ncol = 6)
       temp_cb <- crossbasis(sub$wrf_temp, lag = lag, argvar = argvar,
                             arglag = arglag)
       })
+  
       # run the first stage county-specific models
       county_model <- glm(as.formula(paste0(outcome_names[q], 
         "~ smk_cb + temp_cb + offset(log(population))")), 
@@ -765,10 +768,10 @@ fit_mat <- matrix(NA, nrow = 3, ncol = 6)
       # uses cross reduce function
       suppressWarnings({
         cr_counties <- crossreduce(smk_cb, county_model, type = "var", value = 1)
-      
+
         })
-      }# end if statement
-      
+     # }# end if statement
+
       # store results in matrix ---
       # daily lag results
       cumulative_counties[i,] <- coef(cr_counties)
@@ -777,7 +780,15 @@ fit_mat <- matrix(NA, nrow = 3, ncol = 6)
       # Q-AIC
       qaic_val[i] <- fqaic(county_model)
       
+        }, error = function(e){
+          print(names(county_list_df[i]))
+          }
+        ) # end try catch
+
       } # end loop for county estimates
+
+    # error at hood river; using trycatch to keep going
+    #which(counties[]=="OR_Hood River")
     
     # fill in the fit matrix ----
     fit_mat[,1] <- outcome_names[q]
@@ -785,10 +796,11 @@ fit_mat <- matrix(NA, nrow = 3, ncol = 6)
     fit_mat[,3] <- "ns"
     # subset qaic to only models that converged
     # sum the grand q aic and fill fit matrix
-    fit_mat[h-2,5] <- round(sum(qaic_val[converge[]==T]),2)
+    fit_mat[h-2,5] <- round(sum(qaic_val[!is.na(converge)[]==T]),2)
     # fill in number of county models that successfully converge
     fit_mat[h-2, 6] <- length(which(converge==T))
-    
+    sum(complete.cases(qaic_val))
+
     } # end model fit loop
   
   fit_matrix <- rbind(fit_matrix, fit_mat)
@@ -798,6 +810,7 @@ fit_mat <- matrix(NA, nrow = 3, ncol = 6)
 
 ) # end system time
 
+# fit matrix seems okay; can move on to producing results.
 
   # this part can be moved until df is IDed-----
   # second stage ----
