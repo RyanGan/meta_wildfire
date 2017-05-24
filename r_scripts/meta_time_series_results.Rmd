@@ -805,35 +805,119 @@ fit_mat <- matrix(NA, nrow = 3, ncol = 6)
   
   fit_matrix <- rbind(fit_matrix, fit_mat)
 
+}) # end outcome loop and system time
+
+# now that we have a range of df/knots, I want to filter to the minimum aic
+# for each outcome and print out that value in a table
+
+lag_spline_best_fit <- as_tibble(fit_matrix) %>%  
+  group_by(outcome) %>% 
+  slice(which.min(aic))
+
+# kable
+knitr::kable(lag_spline_best_fit, caption = paste0("Distributed lag spline",
+  "degree of freedom best fit by AIC"))
+```
+
+Now that the degrees of freedom of the lag spline has been decided by lowest AIC, I'll run the loop for actual results.
+
+```{r distributed lag results, message=F, warning=F, results="asis"}
+
+# set estimation method for multivariate approach
+# reml estimation method
+method <- "reml"
+
+# going row by row of the fit tibble
+
+# produce results using fit matrix
+system.time()
+# 1st loop: loop through outcomes
+for(j in 1:length(lag_spline_best_fit$outcome)){
   
-} # end outcome loop
+  j <- 3
+    # easiest to set out the parameters from the start
+    outcome <- lag_spline_best_fit$outcome[j]
+    degree_freedom <- as.numeric(lag_spline_best_fit$df[j])
+  
+    arglag <- list(fun="ns", df=degree_freedom)
+  
+    # overall cumulative summaries
+    # columns need to match degrees of freedom for lag
+    # q: do i need to make this object multiple times or just fill it in?
+    cumulative_counties <- matrix(NA, length(county_list_df), 
+      as.numeric(degree_freedom), 
+      dimnames=list(counties,paste("b",seq(degree_freedom),sep="")))
+    
+    names(cumulative_counties) <- counties
+    
+    # (co)variance matrices
+    counties_cov <- vector("list",length(county_list_df))
+    names(counties_cov) <- counties
+    
+    # I also want to make a matrix of county-level models that fail to converge
+    converge <- matrix(NA, length(county_list_df), 1,
+      dimnames=list(counties, "converge"))
 
-) # end system time
+    # first stage loop for each county ----
+    for(i in seq(county_list_df)) {
+      # if error in following code, move on to next county using trycatch
+      tryCatch({
+      # load county-specific dataframe
+      sub <- county_list_df[[i]]
+      
+      # define the cross-basis
+      suppressWarnings({
+      # cross-basis for smoke
+      smk_cb <- crossbasis(sub$geo_smk10,lag=lag,argvar=argvar,arglag=arglag)
+      # cross-basis for temp
+      temp_cb <- crossbasis(sub$wrf_temp, lag = lag, argvar = argvar,
+                            arglag = arglag)
+      })
+  
+      # run the first stage county-specific models
+      county_model <- glm(as.formula(paste0(outcome, 
+        "~ smk_cb + temp_cb + offset(log(population))")), 
+        family = "quasipoisson", sub)
+      
+      # alert warning if there are convergence issues
+      converge[i,] <- county_model$converged
+      
+      # reduction to summary results ---
+      # prediction summary for smoke 10 ug/m^3 
+      # uses cross reduce function
+      suppressWarnings({
+        cr_counties <- crossreduce(smk_cb, county_model, type = "var", value = 1)
+        })
+     # }# end if statement
 
-# fit matrix seems okay; can move on to producing results.
+      # store results in matrix ---
+      # daily lag results
+      cumulative_counties[i,] <- coef(cr_counties)
+      counties_cov[[i]] <- vcov(cr_counties)
+        }, error = function(e){
+          print(names(county_list_df[i]))
+          }) # end try catch
 
-  # this part can be moved until df is IDed-----
-  # second stage ----
-  # multivariate meta analysis
+      } # end loop for county estimates
+
+  # second stage multivariate meta analysis ----
   # first step is to reduce the county-specific matrix to those that converged
   meta_counties <- cumulative_counties[converge[]==T, ]
   # reduce covariance matrix to models that converged
   meta_cov <- counties_cov[converge[]==T]
   
-  # reml estimation method
-  method <- "reml"
-  
   # overall pooled summary for asthma model
   cumulative_mv_meta <- mvmeta(meta_counties~1, meta_cov, method = method)
   
   # meta summary of crossbasis
+  # ask ander how these estimates work
   summary(cumulative_mv_meta)
   
   # create bases for prediction ----
   # bases of smoke lag (7 days with 10 intervals in each)
   xlag <- 0:70/10
   blag <- do.call("onebasis",c(list(x=xlag),attr(smk_cb,"arglag")))
-  
+
   # county-specific first stage summaries
   county_lag_estimates <- apply(cumulative_counties,1, function(x) exp(blag%*%x))
   
@@ -842,26 +926,36 @@ fit_mat <- matrix(NA, nrow = 3, ncol = 6)
   pooled_cp <- crosspred(blag, coef=coef(cumulative_mv_meta), 
     vcov=vcov(cumulative_mv_meta), model.link="log", at = xlag)
 
-# I can comment this out until the degrees of freedom is decided
-# # # summary stats for resp
-# pooled_cp$allRRfit
-# pooled_cp$allRRlow
-# pooled_cp$allRRhigh
-# 
-# # plot of asthma
-# plot.crosspred(pooled_cp, type="n", ylim=c(.8, 1.2), ylab="RR", xlab="Lag")
-# # this chunk of code will plot the county-specific lags (but it's messy)
-# # so i'm commenting out
-# # matplot(xlag, county_lag_estimates, type="l", col=grey(0.5),lty=2,add=T)
-# abline(h=1)
-# lines(pooled_cp,col=2,lwd=2)
-# legend ("top","Pooled (with 95%CI)",#,"First-stage region-specific"),
-#   lty=c(1,2),lwd=1.5,col=c(2,grey(0.7)),bty="n",inset=0.1,cex=0.8)
-# mtext(text=paste("Cumulative: 10 ug/m^3 increase in GWR Smoke and Outcome ER"))
+
+# fill lag relationship with outcome tibble
+# empty matrix to fill in distributed lag values
+outcome_smk_lag_df <- as_tibble(matrix(NA,  
+  nrow = 0, ncol = 5))
+# assign outcome name
+colnames(outcome_smk_lag_df) <- c("outcome", "lag", "rel_risk", 
+                                  "lower_95", "upper_95")
+
+test <- data_frame(c(rep(outcome, length(xlag)), pooled_cp$allRRfit))
+?as_tibble
+# maybe a bind would work better
+outcome_smk_lag_df <- rbind(outcome_smk_lag_df)
+
+pooled_cp$allRRfit
+pooled_cp$allRRlow
+pooled_cp$allRRhigh
+
+# plot of asthma
+plot.crosspred(pooled_cp, type="n", ylim=c(.8, 1.2), ylab="RR", xlab="Lag")
+# this chunk of code will plot the county-specific lags (but it's messy)
+# so i'm commenting out
+# matplot(xlag, county_lag_estimates, type="l", col=grey(0.5),lty=2,add=T)
+abline(h=1)
+lines(pooled_cp,col=2,lwd=2)
+legend ("top","Pooled (with 95%CI)",#,"First-stage region-specific"),
+  lty=c(1,2),lwd=1.5,col=c(2,grey(0.7)),bty="n",inset=0.1,cex=0.8)
+mtext(text=paste("Cumulative: 10 ug/m^3 increase in GWR Smoke and Outcome ER"))
 
 
-
-  } # end county-specific loop
 ```
 
 Had some convergence issues. I need to try and figure out a way to find the models that won't converge. Next step would be to try and better understand what's going on, and extend to other outcomes. Maybe look at effect modification by age (age strata)?
