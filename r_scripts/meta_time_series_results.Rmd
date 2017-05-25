@@ -721,12 +721,6 @@ fqaic <- function(model) {
   return(qaic)
 }
 
-```
-
-
-
-```{r qaic model fit loop 2-stage dl, message=F, warning=F}
-
 # assuming linear relationship between smoke and outcomes
 argvar <- list(fun="lin")
 
@@ -758,7 +752,7 @@ qaic_val <- 0
 ```
 
 
-```{r two stage distributed lag loop, message=F, warning=F, results="asis"}
+```{r qaic model fit loop, message=F, warning=F, results="asis"}
 
 # first stage ----
 # loop for each county
@@ -948,16 +942,16 @@ Now that the degrees of freedom of the lag spline has been decided by lowest AIC
 # reml estimation method
 method <- "reml"
 
-# going row by row of the fit tibble
-
-# meta summary of crossbasis
+# create a dataframe that contains the distributed lag estimates for each outcome
+dist_lag_df <- as_tibble(matrix(NA,  nrow = 0, ncol = 5))
+colnames(dist_lag_df) <- c("outcome", "lag", "rel_risk", 
+                                  "lower_95", "upper_95")
 
 # produce results using fit matrix
-system.time()
+
 # 1st loop: loop through outcomes
 for(j in 1:length(lag_spline_best_fit$outcome)){
-  
-  j <- 3
+
     # easiest to set out the parameters from the start
     outcome <- lag_spline_best_fit$outcome[j]
     degree_freedom <- as.numeric(lag_spline_best_fit$df[j])
@@ -1011,7 +1005,6 @@ for(j in 1:length(lag_spline_best_fit$outcome)){
       suppressWarnings({
         cr_counties <- crossreduce(smk_cb, county_model, type = "var", value = 1)
         })
-     # }# end if statement
 
       # store results in matrix ---
       # daily lag results
@@ -1022,20 +1015,20 @@ for(j in 1:length(lag_spline_best_fit$outcome)){
           }) # end try catch
 
       } # end loop for county estimates
-
-  # second stage multivariate meta analysis ----
+ 
+  # second stage multivariate meta analysis ---- 
+  # For counties with outcomes that will not even run, set their converge
+  # from missing to False for subsetting
+  converge[is.na(converge)] <- FALSE
+    
   # first step is to reduce the county-specific matrix to those that converged
   meta_counties <- cumulative_counties[converge[]==T, ]
   # reduce covariance matrix to models that converged
   meta_cov <- counties_cov[converge[]==T]
-  
+
   # overall pooled summary for asthma model
   cumulative_mv_meta <- mvmeta(meta_counties~1, meta_cov, method = method)
-  
-  # meta summary of crossbasis
-  # ask ander how these estimates work
-  summary(cumulative_mv_meta)
-  
+
   # create bases for prediction ----
   # bases of smoke lag (7 days with 10 intervals in each)
   xlag <- 0:70/10
@@ -1049,52 +1042,37 @@ for(j in 1:length(lag_spline_best_fit$outcome)){
   pooled_cp <- crosspred(blag, coef=coef(cumulative_mv_meta), 
     vcov=vcov(cumulative_mv_meta), model.link="log", at = xlag)
 
-# fill lag relationship with outcome tibble
-# empty matrix to fill in distributed lag values
-outcome_smk_lag_df <- as_tibble(matrix(NA,  
-  nrow = 0, ncol = 5))
-# assign outcome name
-colnames(outcome_smk_lag_df) <- c("outcome", "lag", "rel_risk", 
+  # create empty dataframe to fill with estimates
+  # fill lag relationship with outcome tibble
+  # empty matrix to fill in distributed lag values
+  outcome_smk_lag_df <- as_tibble(matrix(NA,  nrow = length(xlag), ncol = 5))
+  # assign outcome name
+  colnames(outcome_smk_lag_df) <- c("outcome", "lag", "rel_risk", 
                                   "lower_95", "upper_95")
 
-# prediction for a grid of lag days
-# predictor-specific summaries for 10 ug/m^3 of smoke
-pooled_cp <- crosspred(blag, coef=coef(cumulative_mv_meta), 
-  vcov=vcov(cumulative_mv_meta), model.link="log", from = 0, to = 7, at = 1,  cumul = TRUE)
+  # fill dataframe with values
+  outcome_smk_lag_df[,1] <- outcome
+  outcome_smk_lag_df[,2] <- xlag
+  outcome_smk_lag_df[,3] <- pooled_cp$matRRfit
+  outcome_smk_lag_df[,4] <- pooled_cp$matRRlow
+  outcome_smk_lag_df[,5] <- pooled_cp$matRRhigh
 
-# i'd eventually like to figure out how to use the estimates to calculate by hand
-str(pooled_cp)
-?crosspred
-pooled_cp$coefficients
+  # bind works better than trying to figure out how to fill many rows
+  dist_lag_df <- rbind(dist_lag_df, outcome_smk_lag_df)
 
-test <- data_frame(c(rep(outcome, length(xlag)), pooled_cp$allRRfit))
-?as_tibble
-# maybe a bind would work better
-outcome_smk_lag_df <- rbind(outcome_smk_lag_df)
+}
 
-# vector of exponentiated specific associations
-pooled_cp$matRRfit
+summary(dist_lag_df)
 
-# vectors of cumulative association
-pooled_cp$allRRfit
-pooled_cp$allRRlow
-pooled_cp$allRRhigh
+ggplot(dist_lag_df, aes(x=lag, y=rel_risk)) +
+  geom_line(colour = "blue") +
+  geom_ribbon(aes(ymin = lower_95, ymax = upper_95), fill = "blue", alpha = 0.3) + 
+  scale_y_continuous(limits = c(0.8, 1.2)) +
+  scale_x_continuous(breaks = c(seq(0, 7,by=1))) +
+  geom_hline(yintercept = 1, linetype = 2, colour = "red") +
+  facet_wrap(~ outcome) +
+  theme_bw()
 
-
-# plot of asthma
-plot.crosspred(pooled_cp, type="n", ylim=c(.8, 1.2), ylab="RR", xlab="Lag")
-# this chunk of code will plot the county-specific lags (but it's messy)
-# so i'm commenting out
-# matplot(xlag, county_lag_estimates, type="l", col=grey(0.5),lty=2,add=T)
-abline(h=1)
-lines(pooled_cp,col=2,lwd=2)
-legend ("top","Pooled (with 95%CI)",#,"First-stage region-specific"),
-  lty=c(1,2),lwd=1.5,col=c(2,grey(0.7)),bty="n",inset=0.1,cex=0.8)
-mtext(text=paste("10 ug/m^3 increase in GWR Smoke and Asthma ER"))
-
-
-# use qaic to evaluate model fit
-sum(qaic_val)
 
 ```
 
