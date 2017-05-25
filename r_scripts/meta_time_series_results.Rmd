@@ -689,12 +689,13 @@ mixed_mod <- glmer(hf_n ~ geo_smk10 + geo_smk_lag1 + geo_smk_lag2 +
   family="poisson" )#, control = glmerControl(optimizer = "bobyqa"))
 
 summary(mixed_mod)
-warnings(mixed_mod)
+
 
 ```
 
+Distributed lag setup.
 
-```{r two stage distributed lag }
+```{r two stage dlnm setup, message = F, warning=F}
 
 # create vector of state_county
 counties <- as.character(unique(meta_ts2$state_county))
@@ -731,8 +732,8 @@ fqaic <- function(model) {
 # setup -----
 # assuming linear relationship between smoke and outcomes
 argvar <- list(fun="lin")
-# fitting a natural spline for lag with 5 knots?
-degree_freedom <- 5
+# fitting a natural spline of the lag function
+degree_freedom <- 4
 arglag <- list(fun="ns", df=degree_freedom)
 # I'm not certain on lag yet, but maybe a week makes sense
 lag <- 7
@@ -750,13 +751,16 @@ names(cumulative_counties) <- counties
 counties_cov <- vector("list",length(county_list_df))
 names(counties_cov) <- counties
 
-
 # I also want to make a matrix of county-level models that fail to converge
 converge <- matrix(NA, length(county_list_df), 1,
   dimnames=list(counties, "converge"))
 
 # qaic
 qaic_val <- 0
+```
+
+
+```{r two stage distributed lag loop, message=F, warning=F, results="asis"}
 
 # first stage ----
 # loop for each county
@@ -770,12 +774,13 @@ for(i in seq(county_list_df)) {
   suppressWarnings({
     # cross-basis for smoke
   smk_cb <- crossbasis(sub$geo_smk10,lag=lag,argvar=argvar,arglag=arglag)
-    # cross-basis for temp
-  temp_cb <- crossbasis(sub$wrf_temp, lag = lag, argvar = argvar,
-                        arglag = arglag)
+  #   # cross-basis for temp
+  # temp_cb <- crossbasis(sub$wrf_temp, lag = lag, argvar = argvar,
+  #                       arglag = arglag)
   })
   # run the first stage county-specific models
-  county_model <- glm(hf_n ~ smk_cb + temp_cb + offset(log(population)), 
+  county_model <- glm(asthma_n ~ smk_cb + #temp_cb + 
+                        offset(log(population)), 
     family = "quasipoisson", sub)
 
   # alert warning if there are convergence issues
@@ -788,19 +793,17 @@ for(i in seq(county_list_df)) {
     cr_counties <- crossreduce(smk_cb, county_model, type = "var", value = 1)
   
     })
-  
+
   # store results in matrix ---
   # daily lag results
   cumulative_counties[i,] <- coef(cr_counties)
   counties_cov[[i]] <- vcov(cr_counties)
-  
   # Q-AIC
   qaic_val[i] <- fqaic(county_model)
-
 }
 })
 
-# grand q aic
+# grand q-aic
 sum(qaic_val)
 
 # second stage ----
@@ -817,7 +820,6 @@ method <- "reml"
 cumulative_mv_meta <- mvmeta(meta_counties~1, meta_cov, method = method)
 
 # meta summary of crossbasis
-summary(cumulative_mv_meta)
 
 # create bases for prediction ----
 # bases of smoke lag (7 days with 10 intervals in each)
@@ -827,15 +829,19 @@ blag <- do.call("onebasis",c(list(x=xlag),attr(smk_cb,"arglag")))
 # county-specific first stage summaries
 county_lag_estimates <- apply(cumulative_counties,1, function(x) exp(blag%*%x))
 
+
 # prediction for a grid of lag days
 # predictor-specific summaries for 10 ug/m^3 of smoke
 pooled_cp <- crosspred(blag, coef=coef(cumulative_mv_meta), 
-  vcov=vcov(cumulative_mv_meta), model.link="log", at = xlag)
-
+  vcov=vcov(cumulative_mv_meta), model.link="log", from = 0, to = 7, cumul = T)
+?crosspred
+summary(pooled_cp)
 # # summary stats for resp
-pooled_cp$allRRfit
-pooled_cp$allRRlow
-pooled_cp$allRRhigh
+# pooled_cp$allRRfit
+# pooled_cp$allRRlow
+# pooled_cp$allRRhigh
+
+pooled_cp$allfit
 
 # plot of asthma
 plot.crosspred(pooled_cp, type="n", ylim=c(.8, 1.2), ylab="RR", xlab="Lag")
@@ -846,9 +852,12 @@ abline(h=1)
 lines(pooled_cp,col=2,lwd=2)
 legend ("top","Pooled (with 95%CI)",#,"First-stage region-specific"),
   lty=c(1,2),lwd=1.5,col=c(2,grey(0.7)),bty="n",inset=0.1,cex=0.8)
-mtext(text=paste("Cumulative: 10 ug/m^3 increase in GWR Smoke and Outcome ER"))
+mtext(text=paste("10 ug/m^3 increase in GWR Smoke and Asthma ER"))
 
+# use qaic to evaluate model fit
 sum(qaic_val)
 ```
 
 Had some convergence issues. I need to try and figure out a way to find the models that won't converge. Next step would be to try and better understand what's going on, and extend to other outcomes. Maybe look at effect modification by age (age strata)?
+
+
