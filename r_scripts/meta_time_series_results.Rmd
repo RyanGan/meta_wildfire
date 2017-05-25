@@ -38,22 +38,23 @@ Read in meta time series data.
 meta_ts <- read_csv("./data/meta_timeseries.csv") %>% 
   # creating 10 unit increase var of geo smoke and day of week
   mutate(geo_smk10 = geo_smk_pm/10,
-         day = weekdays(date)) %>% 
+         day = weekdays(date),
+         state_county = paste(state, county, sep = "_")) %>% 
   # creating lag variables for a crude distributed lag
-  group_by(county) %>% 
+  group_by(state_county) %>% 
   # create smoke and lag variables
   mutate(smoke0 = ifelse(geo_smk_pm > 0, 1, 0),
          smoke5 = ifelse(geo_smk_pm > 5, 1, 0),
          smoke10 = ifelse(geo_smk_pm > 10, 1, 0),
          smoke15 = ifelse(geo_smk_pm > 15, 1, 0), 
          # lag variable
-         geo_smk_lag1 = lag(geo_smk10, 1, order_by = county),
-         geo_smk_lag2 = lag(geo_smk10, 2, order_by = county),
-         geo_smk_lag3 = lag(geo_smk10, 3, order_by = county),
-         geo_smk_lag4 = lag(geo_smk10, 4, order_by = county),
-         geo_smk_lag5 = lag(geo_smk10, 5, order_by = county),
-         geo_smk_lag6 = lag(geo_smk10, 6, order_by = county),
-         geo_smk_lag7 = lag(geo_smk10, 7, order_by = county)) %>% 
+         geo_smk_lag1 = lag(geo_smk10, 1, order_by = state_county),
+         geo_smk_lag2 = lag(geo_smk10, 2, order_by = state_county),
+         geo_smk_lag3 = lag(geo_smk10, 3, order_by = state_county),
+         geo_smk_lag4 = lag(geo_smk10, 4, order_by = state_county),
+         geo_smk_lag5 = lag(geo_smk10, 5, order_by = state_county),
+         geo_smk_lag6 = lag(geo_smk10, 6, order_by = state_county),
+         geo_smk_lag7 = lag(geo_smk10, 7, order_by = state_county)) %>% 
   ungroup()
 
 # smoke wave days (at least 2 consecutive days in the 98th percentile of PM)
@@ -73,29 +74,6 @@ smoke_wave <- meta_ts %>%
 # merge in smokewave day
 meta_ts <- meta_ts %>% 
   right_join(smoke_wave, by = c("state", "county", "date"))
-
-
-```
-
-I also incorporated the smoke-wave day approach by Coco Liu where I identified the 98th percentile of the observed PM2.5 values for the GWR estimates (without background PM2.5 subtracted off). Then I set the binary cutoff of at least two days of levels above this 98th percentile as a smoke wave day.
-
-Comparing smoke-wave approach to our method of defining smoke days
-
-```{r smoke days, message=F, warning=F}
-# only 150 smoke wave days
-xtabs(~smoke_wave,  meta_ts)
-# if we compare to our geo smoke > 10, we'd add 362 extra days
-xtabs(~smoke_wave + smoke10, meta_ts)
-# if we used smoke >15 we'd add 164 extra days 
-xtabs(~smoke_wave + smoke15, meta_ts)
-
-```
-
-## Descriptive Plots
-
-First step is to determine if there are any notable differences between the states. Going to aggregate counties by state (averaging health outcomes and smoke) and split states to Washington and Oregon.
-
-```{r data wrangle, message = F, warning = F}
 
 # washington
 wa_ts <- meta_ts %>% filter(state == "WA")
@@ -117,6 +95,23 @@ state_smoke <- meta_ts %>% group_by(state, date) %>%
   full_join(state_outcome_rate, by = c("state", "date"))
 
 ```
+
+I also incorporated the smoke-wave day approach by Coco Liu where I identified the 98th percentile of the observed PM2.5 values for the GWR estimates (without background PM2.5 subtracted off). Then I set the binary cutoff of at least two days of levels above this 98th percentile as a smoke wave day.
+
+Comparing smoke-wave approach to our method of defining smoke days
+
+```{r smoke days, message=F, warning=F}
+# only 150 smoke wave days
+xtabs(~smoke_wave,  meta_ts)
+# if we compare to our geo smoke > 10, we'd add 362 extra days
+xtabs(~smoke_wave + smoke10, meta_ts)
+# if we used smoke >15 we'd add 164 extra days 
+xtabs(~smoke_wave + smoke15, meta_ts)
+```
+
+## Descriptive Plots
+
+First step is to determine if there are any notable differences between the states. Going to aggregate counties by state (averaging health outcomes and smoke) and split states to Washington and Oregon.
 
 ### Visualizing Exposure Time Series
 
@@ -258,7 +253,6 @@ wa_smk_df <- wa_county_df %>%
     smk_cut_method = factor(smk_cut_method, 
       levels = c("Smoke PM2.5 > 5 ug/m^3", "Smoke PM2.5 > 10 ug/m^3", 
                  "Smoke PM2.5 > 15 ug/m^3", "Smoke Wave")))
-
 
 # map ----
 
@@ -648,8 +642,9 @@ summary(mixed_mod)
 
 ### Distributed Lag With Covariates in Model
 
-This is likely not ideal, but may be a start
+Set up list of counties to run through two-stage distributed lag.
 
+<<<<<<< HEAD
 ```{r asthma dist lag analysis, message=F, warning=F, results="asis", eval = F}
 # I need to concatnate the state and counties as there are some counties with
 # the same name in both states
@@ -696,13 +691,16 @@ summary(mixed_mod)
 Distributed lag setup.
 
 ```{r two stage dlnm setup, message = F, warning=F}
+=======
+```{r two stage dl setup, message=F, warning=F}
+>>>>>>> e65228ec87d4dae2aef62b97a9a3b4f39361c5df
 
 # create vector of state_county
-counties <- as.character(unique(meta_ts2$state_county))
+counties <- as.character(unique(meta_ts$state_county))
 
 # create dataframe list of each county
 county_list_df <- lapply(counties, function(x) 
-  meta_ts2[meta_ts2$state_county==x,])
+  meta_ts[meta_ts$state_county==x,])
 # assign each element of the list object the county name
 names(county_list_df) <- counties
 # calculate length of counties (75)
@@ -711,12 +709,12 @@ m <- length(counties)
 # GWR PM2.5 ranges
 smk_range <- t(sapply(county_list_df, 
   function(x) range(x$geo_smk10,na.rm=T)))
-smk_range
+# smk_range
 
 # population range
 pop_range <- t(sapply(county_list_df, 
   function(x) range(x$population,na.rm=T)))
-pop_range
+# pop_range
 # -----
 
 # function to compute the QAIC (quasi-poisson AIC)
@@ -727,11 +725,15 @@ fqaic <- function(model) {
   return(qaic)
 }
 
-# attempting dl model with asthma
+```
 
-# setup -----
+
+
+```{r qaic model fit loop 2-stage dl, message=F, warning=F}
+
 # assuming linear relationship between smoke and outcomes
 argvar <- list(fun="lin")
+<<<<<<< HEAD
 # fitting a natural spline of the lag function
 degree_freedom <- 4
 arglag <- list(fun="ns", df=degree_freedom)
@@ -805,30 +807,264 @@ for(i in seq(county_list_df)) {
 
 # grand q-aic
 sum(qaic_val)
+=======
+# I'm not certain on time lag yet, but maybe a week makes sense
+lag <- 7
 
-# second stage ----
-# multivariate meta analysis
-# first step is to reduce the county-specific matrix to those that converged
-meta_counties <- cumulative_counties[converge[]==T, ]
-# reduce covariance matrix to models that converged
-meta_cov <- counties_cov[converge[]==T]
+# create outcome list to loop through
+outcome_names <- colnames(meta_ts[,which(colnames(meta_ts)=="resp_n"):
+  which(colnames(meta_ts)=="broken_arm_n")])
+# copd is having issues; i suspect counties with no events is the problem
+# empty vector to fill with error messages of counties where models can be run
+# mostly due to no variation in the outcome (i.e. all 0s in the time series)
 
+fit_matrix <- matrix(NA, nrow=0, ncol=6)
+colnames(fit_matrix) <- c("outcome", "exposure", "fit_type", "df", "aic",
+                           "n_mod_conv")
+
+system.time(
+# 1st loop: loop through outcomes
+for(q in seq(outcome_names)){
+
+# 2nd loop: vary degrees of freedom for lag knots
+# set up empty matrix to assess model fit
+fit_mat <- matrix(NA, nrow = 3, ncol = 6) 
+
+  # 2 df will not work for a spline, going from 3 to 6 df
+  for(h in 3:5){ # start loop for df
+
+    # fitting a natural spline for lag with 5 knots?
+    fit_mat[h-2, 4] <- degree_freedom <- h
+    arglag <- list(fun="ns", df=degree_freedom)
+  
+    # overall cumulative summaries
+    # columns need to match degrees of freedom for lag
+    # q: do i need to make this object multiple times or just fill it in?
+    cumulative_counties <- matrix(NA, length(county_list_df), 
+      as.numeric(degree_freedom), 
+      dimnames=list(counties,paste("b",seq(degree_freedom),sep="")))
+    
+    names(cumulative_counties) <- counties
+    
+    # (co)variance matrices
+    counties_cov <- vector("list",length(county_list_df))
+    names(counties_cov) <- counties
+    
+    # I also want to make a matrix of county-level models that fail to converge
+    converge <- matrix(NA, length(county_list_df), 1,
+      dimnames=list(counties, "converge"))
+    
+    # empty table to log degrees of freedom and AIC for each outcome
+    
+    # qaic
+    qaic_val <- 0
+
+    # first stage ----
+    # loop for each county
+    for(i in seq(county_list_df)) {
+      # if error in following code, move on to next county
+      tryCatch({
+      # load county-specific dataframe
+      sub <- county_list_df[[i]]
+      
+      # run only if there is at least one observation of outcome in ts
+      #if(max(sub[, which(colnames(sub)==outcome_names[[q]])]) > 2){
+
+      # define the cross-basis ----
+      suppressWarnings({
+      # cross-basis for smoke
+      smk_cb <- crossbasis(sub$geo_smk10,lag=lag,argvar=argvar,arglag=arglag)
+      # cross-basis for temp
+      temp_cb <- crossbasis(sub$wrf_temp, lag = lag, argvar = argvar,
+                            arglag = arglag)
+      })
+  
+      # run the first stage county-specific models
+      county_model <- glm(as.formula(paste0(outcome_names[q], 
+        "~ smk_cb + temp_cb + offset(log(population))")), 
+        family = "quasipoisson", sub)
+      
+      # alert warning if there are convergence issues
+      converge[i,] <- county_model$converged
+      
+      # reduction to summary results ---
+      # prediction summary for smoke 10 ug/m^3 
+      # uses cross reduce function
+      suppressWarnings({
+        cr_counties <- crossreduce(smk_cb, county_model, type = "var", value = 1)
+
+        })
+     # }# end if statement
+
+      # store results in matrix ---
+      # daily lag results
+      cumulative_counties[i,] <- coef(cr_counties)
+      counties_cov[[i]] <- vcov(cr_counties)
+      
+      # Q-AIC
+      qaic_val[i] <- fqaic(county_model)
+      
+        }, error = function(e){
+          print(names(county_list_df[i]))
+          }
+        ) # end try catch
+
+      } # end loop for county estimates
+
+    # error at hood river; using trycatch to keep going
+    #which(counties[]=="OR_Hood River")
+    
+    # fill in the fit matrix ----
+    fit_mat[,1] <- outcome_names[q]
+    fit_mat[,2] <- exposure <- "wrf_smk10"
+    fit_mat[,3] <- "ns"
+    # subset qaic to only models that converged
+    # sum the grand q aic and fill fit matrix
+    fit_mat[h-2,5] <- round(sum(qaic_val[!is.na(converge)[]==T]),2)
+    # fill in number of county models that successfully converge
+    fit_mat[h-2, 6] <- length(which(converge==T))
+    sum(complete.cases(qaic_val))
+
+    } # end model fit loop
+  
+  fit_matrix <- rbind(fit_matrix, fit_mat)
+
+}) # end outcome loop and system time
+
+# now that we have a range of df/knots, I want to filter to the minimum aic
+# for each outcome and print out that value in a table
+
+lag_spline_best_fit <- as_tibble(fit_matrix) %>%  
+  group_by(outcome) %>% 
+  slice(which.min(aic))
+
+# kable
+knitr::kable(lag_spline_best_fit, caption = paste0("Distributed lag spline",
+  "degree of freedom best fit by AIC"))
+```
+>>>>>>> e65228ec87d4dae2aef62b97a9a3b4f39361c5df
+
+Now that the degrees of freedom of the lag spline has been decided by lowest AIC, I'll run the loop for actual results.
+
+```{r distributed lag results, message=F, warning=F, results="asis"}
+
+# set estimation method for multivariate approach
 # reml estimation method
 method <- "reml"
 
-# overall pooled summary for asthma model
-cumulative_mv_meta <- mvmeta(meta_counties~1, meta_cov, method = method)
+# going row by row of the fit tibble
 
+<<<<<<< HEAD
 # meta summary of crossbasis
+=======
+# produce results using fit matrix
+system.time()
+# 1st loop: loop through outcomes
+for(j in 1:length(lag_spline_best_fit$outcome)){
+  
+  j <- 3
+    # easiest to set out the parameters from the start
+    outcome <- lag_spline_best_fit$outcome[j]
+    degree_freedom <- as.numeric(lag_spline_best_fit$df[j])
+  
+    arglag <- list(fun="ns", df=degree_freedom)
+  
+    # overall cumulative summaries
+    # columns need to match degrees of freedom for lag
+    # q: do i need to make this object multiple times or just fill it in?
+    cumulative_counties <- matrix(NA, length(county_list_df), 
+      as.numeric(degree_freedom), 
+      dimnames=list(counties,paste("b",seq(degree_freedom),sep="")))
+    
+    names(cumulative_counties) <- counties
+    
+    # (co)variance matrices
+    counties_cov <- vector("list",length(county_list_df))
+    names(counties_cov) <- counties
+    
+    # I also want to make a matrix of county-level models that fail to converge
+    converge <- matrix(NA, length(county_list_df), 1,
+      dimnames=list(counties, "converge"))
 
-# create bases for prediction ----
-# bases of smoke lag (7 days with 10 intervals in each)
-xlag <- 0:70/10
-blag <- do.call("onebasis",c(list(x=xlag),attr(smk_cb,"arglag")))
+    # first stage loop for each county ----
+    for(i in seq(county_list_df)) {
+      # if error in following code, move on to next county using trycatch
+      tryCatch({
+      # load county-specific dataframe
+      sub <- county_list_df[[i]]
+      
+      # define the cross-basis
+      suppressWarnings({
+      # cross-basis for smoke
+      smk_cb <- crossbasis(sub$geo_smk10,lag=lag,argvar=argvar,arglag=arglag)
+      # cross-basis for temp
+      temp_cb <- crossbasis(sub$wrf_temp, lag = lag, argvar = argvar,
+                            arglag = arglag)
+      })
+  
+      # run the first stage county-specific models
+      county_model <- glm(as.formula(paste0(outcome, 
+        "~ smk_cb + temp_cb + offset(log(population))")), 
+        family = "quasipoisson", sub)
+      
+      # alert warning if there are convergence issues
+      converge[i,] <- county_model$converged
+      
+      # reduction to summary results ---
+      # prediction summary for smoke 10 ug/m^3 
+      # uses cross reduce function
+      suppressWarnings({
+        cr_counties <- crossreduce(smk_cb, county_model, type = "var", value = 1)
+        })
+     # }# end if statement
 
-# county-specific first stage summaries
-county_lag_estimates <- apply(cumulative_counties,1, function(x) exp(blag%*%x))
+      # store results in matrix ---
+      # daily lag results
+      cumulative_counties[i,] <- coef(cr_counties)
+      counties_cov[[i]] <- vcov(cr_counties)
+        }, error = function(e){
+          print(names(county_list_df[i]))
+          }) # end try catch
 
+      } # end loop for county estimates
+
+  # second stage multivariate meta analysis ----
+  # first step is to reduce the county-specific matrix to those that converged
+  meta_counties <- cumulative_counties[converge[]==T, ]
+  # reduce covariance matrix to models that converged
+  meta_cov <- counties_cov[converge[]==T]
+  
+  # overall pooled summary for asthma model
+  cumulative_mv_meta <- mvmeta(meta_counties~1, meta_cov, method = method)
+  
+  # meta summary of crossbasis
+  # ask ander how these estimates work
+  summary(cumulative_mv_meta)
+  
+  # create bases for prediction ----
+  # bases of smoke lag (7 days with 10 intervals in each)
+  xlag <- 0:70/10
+  blag <- do.call("onebasis",c(list(x=xlag),attr(smk_cb,"arglag")))
+
+  # county-specific first stage summaries
+  county_lag_estimates <- apply(cumulative_counties,1, function(x) exp(blag%*%x))
+  
+  # prediction for a grid of lag days
+  # predictor-specific summaries for 10 ug/m^3 of smoke
+  pooled_cp <- crosspred(blag, coef=coef(cumulative_mv_meta), 
+    vcov=vcov(cumulative_mv_meta), model.link="log", at = xlag)
+>>>>>>> e65228ec87d4dae2aef62b97a9a3b4f39361c5df
+
+
+# fill lag relationship with outcome tibble
+# empty matrix to fill in distributed lag values
+outcome_smk_lag_df <- as_tibble(matrix(NA,  
+  nrow = 0, ncol = 5))
+# assign outcome name
+colnames(outcome_smk_lag_df) <- c("outcome", "lag", "rel_risk", 
+                                  "lower_95", "upper_95")
+
+<<<<<<< HEAD
 
 # prediction for a grid of lag days
 # predictor-specific summaries for 10 ug/m^3 of smoke
@@ -842,6 +1078,16 @@ summary(pooled_cp)
 # pooled_cp$allRRhigh
 
 pooled_cp$allfit
+=======
+test <- data_frame(c(rep(outcome, length(xlag)), pooled_cp$allRRfit))
+?as_tibble
+# maybe a bind would work better
+outcome_smk_lag_df <- rbind(outcome_smk_lag_df)
+
+pooled_cp$allRRfit
+pooled_cp$allRRlow
+pooled_cp$allRRhigh
+>>>>>>> e65228ec87d4dae2aef62b97a9a3b4f39361c5df
 
 # plot of asthma
 plot.crosspred(pooled_cp, type="n", ylim=c(.8, 1.2), ylab="RR", xlab="Lag")
@@ -854,10 +1100,22 @@ legend ("top","Pooled (with 95%CI)",#,"First-stage region-specific"),
   lty=c(1,2),lwd=1.5,col=c(2,grey(0.7)),bty="n",inset=0.1,cex=0.8)
 mtext(text=paste("10 ug/m^3 increase in GWR Smoke and Asthma ER"))
 
+<<<<<<< HEAD
 # use qaic to evaluate model fit
 sum(qaic_val)
+=======
+
+>>>>>>> e65228ec87d4dae2aef62b97a9a3b4f39361c5df
 ```
 
 Had some convergence issues. I need to try and figure out a way to find the models that won't converge. Next step would be to try and better understand what's going on, and extend to other outcomes. Maybe look at effect modification by age (age strata)?
 
+<<<<<<< HEAD
+=======
+Thoughts:
+For each outcome, I need to loop through degrees of freedom to find the best AIC (lowest) for the fit of spline for the lag.
+
+Once the best spline fit is found, then i'll produce figures.
+
+>>>>>>> e65228ec87d4dae2aef62b97a9a3b4f39361c5df
 
