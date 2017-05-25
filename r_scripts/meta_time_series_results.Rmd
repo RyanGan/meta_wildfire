@@ -1060,7 +1060,7 @@ colnames(outcome_smk_lag_df) <- c("outcome", "lag", "rel_risk",
 # prediction for a grid of lag days
 # predictor-specific summaries for 10 ug/m^3 of smoke
 pooled_cp <- crosspred(blag, coef=coef(cumulative_mv_meta), 
-  vcov=vcov(cumulative_mv_meta), model.link="log", from = 0, to = 7, cumul = T)
+  vcov=vcov(cumulative_mv_meta), model.link="log", from = 0, to = 7, at = 1,  cumul = TRUE)
 
 # i'd eventually like to figure out how to use the estimates to calculate by hand
 str(pooled_cp)
@@ -1072,7 +1072,8 @@ test <- data_frame(c(rep(outcome, length(xlag)), pooled_cp$allRRfit))
 # maybe a bind would work better
 outcome_smk_lag_df <- rbind(outcome_smk_lag_df)
 
-
+# vector of exponentiated specific associations
+pooled_cp$matRRfit
 
 # vectors of cumulative association
 pooled_cp$allRRfit
