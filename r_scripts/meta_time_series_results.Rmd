@@ -17,7 +17,7 @@ This is a pooled analysis of state and year specific time-series evaluating the 
 
 Both state datasets were limited to only emergency room visits (billed for Oregon, observed for Washington).
 
-```{r libaries, message = F, warning = F}
+```{r libaries, message = F, warning = F, echo = F}
 library(tidyverse)
 library(lme4)
 library(broom)
@@ -34,8 +34,8 @@ library(mvmeta)
 
 Read in meta time series data.
 
-```{r read data, message = F, warning = F}
-meta_ts <- read_csv("./data/meta_timeseries.csv") %>% 
+```{r read data, message = F, warning = F, echo = F}
+meta_ts <- read_csv("../data/meta_timeseries.csv") %>% 
   # creating 10 unit increase var of geo smoke and day of week
   mutate(geo_smk10 = geo_smk_pm/10,
          day = weekdays(date),
@@ -100,7 +100,7 @@ I also incorporated the smoke-wave day approach by Coco Liu where I identified t
 
 Comparing smoke-wave approach to our method of defining smoke days
 
-```{r smoke days, message=F, warning=F}
+```{r smoke days, message=F, warning=F, echo = F}
 # only 150 smoke wave days
 xtabs(~smoke_wave,  meta_ts)
 # if we compare to our geo smoke > 10, we'd add 362 extra days
@@ -109,6 +109,8 @@ xtabs(~smoke_wave + smoke10, meta_ts)
 xtabs(~smoke_wave + smoke15, meta_ts)
 ```
 
+The "smoke wave" definition captures 150 days in Oregon counties where smoke is likely to have been present. Using our cutoff of at least 10 ug/m^3 or 15 ug/m^3 on the smoke PM2.5 variables, we add at 362 and 164 additional days, respectively. Probably the >15 ug/m^3 cutoff balances sensitivity and specificity the best. Although this would be an interesting analysis to look at if we knew "true" smoke in certain areas.
+ 
 ## Descriptive Plots
 
 First step is to determine if there are any notable differences between the states. Going to aggregate counties by state (averaging health outcomes and smoke) and split states to Washington and Oregon.
@@ -119,7 +121,7 @@ Small multiples of smoke exposure series by smoke estimation method for each cou
 
 #### Washington 2012 Smoke Time Series
 
-```{r washington smoke, message = F, warning = F, results = "asis"}
+```{r washington smoke, message = F, warning = F, echo = F, results = "asis"}
 
 # small multiples dataset
 wa_smk <- wa_ts %>% 
@@ -141,7 +143,7 @@ wa_smk_plot
 
 #### Oregon 2013 Smoke Time Series
 
-```{r oregon smoke, message = F, warning = F, results = "asis"}
+```{r oregon smoke, message = F, warning = F, echo = F, results = "asis"}
 
 # small multiples dataset
 or_smk <- or_ts %>% 
@@ -167,7 +169,7 @@ Seems like the southwest portion of Oregon was affected by smoke where the rest 
 
 *Washington*
 
-```{r static wash smoke map, message=F, warning=F, results="asis"}
+```{r static wash smoke map, message=F, warning=F, echo = F, results="asis"}
 
 # data wrangle ----
 #first step is to summarise the counts of smoke days in each county 
@@ -214,7 +216,7 @@ smoke_map <- ggplot(wa_smk_df, aes(x=long, y=lat, group=group)) +
   facet_wrap(~smk_cut_method) +
   xlab("Longitude") +
   ylab("Latitude") +
-  ggtitle("Washington: Counties affected by smoke") +
+  ggtitle("Washington: Counties affected by smoke 2012") +
   theme(panel.background = element_rect(fill = 'white', colour = 'black'),
     panel.grid.major = element_blank(),
     panel.grid.minor = element_blank(),
@@ -224,66 +226,10 @@ smoke_map
 
 ```
 
-Attempting an animated plot. Doesn't seem to work on my PC for some reasons which I think has to do with the ImageMagick software. I'll figure it out later. 
-
-```{r animated wash smoke map, message=F, warning=F, results="asis", eval = F}
-
-# data wrangle ----
-wa_smk_days <- wa_ts %>% 
-  select(county, date, smoke5, smoke10, smoke15, smoke_wave) %>% 
-  # county needs to be lowercase to join to maps dataframe
-  mutate(county = tolower(county)) %>% 
-  # need to gather smoke variables by date
-  gather(key = smk_cut_method, value = smoke_days, -date, -county) %>% 
-  # maybe too many dates, going to filter to just september to october
-  filter(date >= "2012-09-15" & date <= "2012-10-01")
-  
-summary(wa_smk_days)
-# join county counts to map df
-wa_smk_df <- wa_county_df %>% 
-  right_join(wa_smk_days, by = c("subregion" = "county")) %>% 
-  filter(smk_cut_method != "smk_day0") %>% 
-  # rename smoke day cutoffs 
-  mutate(smk_cut_method = 
-    ifelse(smk_cut_method == "smoke5","Smoke PM2.5 > 5 ug/m^3",
-    ifelse(smk_cut_method == "smoke10", "Smoke PM2.5 > 10 ug/m^3",
-    ifelse(smk_cut_method == "smoke15", "Smoke PM2.5 > 15 ug/m^3",
-    ifelse(smk_cut_method == "smoke_wave", "Smoke Wave", NA)))),
-    # preserve smoke method order for small multiple
-    smk_cut_method = factor(smk_cut_method, 
-      levels = c("Smoke PM2.5 > 5 ug/m^3", "Smoke PM2.5 > 10 ug/m^3", 
-                 "Smoke PM2.5 > 15 ug/m^3", "Smoke Wave")))
-
-# map ----
-
-# smoke days where GWR smoke > 15
-smoke_map <- ggplot(wa_smk_df, aes(x=long, y=lat, group=group, frame = date)) +
-  # fill with number of smoke days
-  geom_polygon(aes(fill = smoke_days), alpha = 0.7) +
-  scale_fill_gradient("Smoke-Impacted Days",
-                      low = "#0b486b", high = "#f56217") +
-  # add county path on top
-  geom_path() +
-  facet_wrap(~smk_cut_method) +
-  xlab("Longitude") +
-  ylab("Latitude") +
-  theme(panel.background = element_rect(fill = 'white', colour = 'black'),
-    panel.grid.major = element_blank(),
-    panel.grid.minor = element_blank(),
-    strip.background = element_rect(colour=NA, fill=NA))
-
-gganimate(smoke_map, "output.gif")
-
-ggani
-ani.options()
-
-magickPath <-shortPathName("C:\\Program Files\\ImageMagick-7.0.5-Q16\\magick.exe")
-ani.options(convert=magickPath)
-```
 
 *Oregon*
 
-```{r static oregon smoke map, message=F, warning=F, results="asis"}
+```{r static oregon smoke map, message=F, warning=F, echo = F,  results="asis"}
 
 # data wrangle ----
 #first step is to summarise the counts of smoke days in each county 
@@ -345,7 +291,7 @@ smoke_map
 
 Comparison between Oregon and Washington aggregated health outcomes over time.
 
-```{r state outcome trends, message = F, warning = F, results = "asis"}
+```{r state outcome trends, message = F, warning = F, echo = F, results = "asis"}
 # I want CVD and respiratory rates by each state so I can make a 4 panel
 state_cvd_resp <- state_outcome_rate %>% 
   select(state, date, cvd_n, resp_n) %>% 
@@ -367,11 +313,11 @@ CVD rates in Oregon for 2013 and Washington 2012 were similar, with no clear tre
 
 All respiratory outcomes were slightly different between Washington and Oregon. It looks like Oregon has almost twice the respiratory ER rate compared to Washington. This could mean some difference in respiratory rates between states, or more likely could have something to do with the different data sources. I'll need to think about this more. Justifies accounting for state though. Also, both states appear to have trends in respiratory ER visits where there is a decline in summer months, with an increase in the rate around the fall. Oregon has a pretty pronounced seasonal variation. 
 
-It would be good to take a look at state-specific outcome time-series.
+It would be good to take a look at state-specific outcome time-series. However, in general it is probably safe to assume that there is a temporal pattern in the respiratory outcomes and no clear temporal pattern with CVD outcomes.
 
 ### Washington Health Outcomes Time Series
 
-```{r wash health, warning=F, message=F, results='asis'}
+```{r wash health ts plot, warning=F, message=F, echo = F, results='asis'}
 
 # small multiples dataset
 wa_health <- wa_ts %>% 
@@ -397,7 +343,7 @@ count_plot
 
 *Oregon*
 
-```{r oregon health, message=F, warning=F, results='asis'}
+```{r oregon health ts plot, message=F, warning=F, echo = F,  results='asis'}
 # small multiples dataset
 or_health <- or_ts %>% 
   select(county, date, population, n_obs:broken_arm_n) %>% 
@@ -419,12 +365,11 @@ count_plot
 ```
 
 
-
 ### Scatter Plot of Outcome Rates and Geo Smoke PM~2.5~
 
 Visualizing rates of outcomes by 10ug/m^3 increasing Geoweighted smoke PM~2.5~.
 
-```{r scatter plot, message=F, warning=F, results="asis"}
+```{r scatter plot, message=F, warning=F, echo = F, results="asis"}
 # calclating rates per 100k
 rate_df <- meta_ts %>% mutate_at(
     which(colnames(meta_ts)=="n_obs"):which(colnames(meta_ts)=="broken_arm_n"),
@@ -462,9 +407,10 @@ It looks like there is a linear relationship with smoke and asthma (expected), m
 
 ### Standard Regression Models
 
-Same-day estimates of association between smoke via GWR and outcomes.
+Same-day estimates of association between smoke via GWR and outcomes. 
+County and state treated as a fixed effect covariate.
 
-```{r standard analysis, message=F, warning=F, results="asis"}
+```{r standard analysis, message=F, warning=F, echo = F, results="asis"}
 # create empty dataframe
 rr_df <- data.frame(matrix(nrow = 12, ncol = 4))
 colnames(rr_df) <- c("outcome", "rel_risk", "lower_95", "upper_95")
@@ -526,7 +472,7 @@ ggplot(rr_df, aes(x=outcome, y = rel_risk, colour = group)) +
 
 Smoke-wave associations with outcomes.
 
-```{r standard analysis smoke wave, message=F, warning=F, results="asis"}
+```{r standard analysis smoke wave, message=F, warning=F, echo = F, results="asis"}
 # create empty dataframe
 rr_df <- data.frame(matrix(nrow = 12, ncol = 4))
 colnames(rr_df) <- c("outcome", "rel_risk", "lower_95", "upper_95")
@@ -586,111 +532,83 @@ ggplot(rr_df, aes(x=outcome, y = rel_risk, colour = group)) +
   ggtitle("Relative risk for exposure to a smoke-wave")
 ```
 
-### Crude Mediation
-
-```{r mediation, eval = F}
-smk_pm <- lmer(geo_wt_pm ~ smoke_wave + wrf_temp + (1|day) +
-                     (1|county) + (1|state), meta_ts)
-# smoke is associated with higher pm2.5
-summary(smk_pm)
-
-# smoke is associated with asthma
-smk_asthma <- glmer(asthma_n ~ smoke_wave + wrf_temp + (1|day) +
-                     (1|county) + (1|state) +
-                     offset(log(population)), 
-                     meta_ts, family="poisson")
-summary(smk_asthma)
-
-# add in geo wt pm
-mediation <- glmer(asthma_n ~ smoke_wave + geo_wt_pm + 
-                     wrf_temp + (1|day) +
-                     (1|county) + (1|state) +
-                     offset(log(population)), 
-                     meta_ts, family="poisson")
-
-summary(mediation)
-
-
-```
-
-
-### Interaction Model
-
-```{r interaction, message=F, warning=F, results="asis", eval = F}
-smoke_pm_int <- glmer(asthma_n ~ smoke15 + geo_wt_pm + smoke10:geo_wt_pm + 
-                     wrf_temp + (1|day) +
-                     (1|county) + (1|state) +
-                     offset(log(population)), 
-                     meta_ts, family="poisson")
-
-summary(smoke_pm_int)
-
-```
 
 ### Mixed Model
 
-```{r mixed mod analysis, message=F, warning=F, results="asis", eval = F}
-mixed_mod <- glmer(asthma_n ~ smoke_wave + wrf_temp + (1|day) +
-                     (1|county) + (1|state) +
-                     offset(log(population)), 
-                     meta_ts, family="poisson")
+Continous smoke via GWR. County and state treated as a random effect.
 
-summary(mixed_mod)
+```{r random effects smk, message=F, warning=F, echo = F, results="asis"}
+# create empty dataframe
+rr_df <- data.frame(matrix(nrow = 12, ncol = 4))
+colnames(rr_df) <- c("outcome", "rel_risk", "lower_95", "upper_95")
 
+# vector of outcomes
+outcome_list <- colnames(meta_ts[, which(colnames(meta_ts)=="resp_n"):
+    which(colnames(meta_ts)=="broken_arm_n")])
+
+# names 
+outcome_names <- c('All Respiratory', 'Asthma', 'COPD', 'Pneumonia', 
+  'Acute Bronchitis', 'Cardiovascular Disease', 'Arrhythmia', 
+  'Cerebrovascular Disease', 'Heart Failure', 'Ischemic Heart Disease',
+  'Myocardial Infarction', 'Broken Arm')
+
+# populate outcome column
+rr_df[,1] <- factor(outcome_names, levels=unique(outcome_names))
+
+meow <- lapply(outcome_list, function(x){
+
+ smk_est <- tidy(glmer(as.formula(paste0(x, 
+    "~ geo_smk10 + wrf_temp + (1|county) + 
+    (1|state) + offset(log(population))")), 
+    meta_ts, family="poisson"))[2, ]
+ 
+ rr <- c(round(exp(smk_est[1,2]),3),
+         round(exp(smk_est[1,2]-1.96*smk_est[1,3]),3),
+         round(exp(smk_est[1,2]+1.96*smk_est[1,3]),3))
+ 
+}) # end apply
+
+for(i in 1:nrow(rr_df)){
+  rr_df[i,2:4] <- meow[[i]]
+}
+
+# add in a grouping variable
+rr_df$group <- NA
+rr_df[1:5, 5] <- "Respiratory"
+rr_df[6:11, 5] <- "CVD"
+rr_df[12, 5] <- "Broken Arm"
+
+# tried apply function and it might have been easier to just use a loop
+# as I needed a for loop to fill the list in to the dataframe
+# code is more compact though
+# I should check speed (or make a custom function to do this one day)
+
+ggplot(rr_df, aes(x=outcome, y = rel_risk, colour = group)) +
+  geom_point() +
+  geom_errorbar(aes(ymin=lower_95, ymax=upper_95), width = 0.2) +
+  geom_hline(yintercept = 1, linetype = 2, colour = "red") +
+  theme(
+   panel.background = element_rect(fill = 'white', colour = 'black'),
+   panel.grid.major = element_blank(),
+   panel.grid.minor = element_blank(),
+   axis.text.x = element_text(angle = 90, vjust = .75)) +
+  ylab("Relative Risk") +
+  xlab("Outcome") +
+  ggtitle("Relative Risk for a 10ug/m^3 increase PM2.5 estimated via GWR Smoke")
 ```
 
 
-### Distributed Lag With Covariates in Model
+### Two-Stage Distributed Lag 
+
+Two-stage distributed lag runs a county specific model and then pools the county-specific lag estimates in one final model.
+
+For these analyses, I assume a linear relationship between smoke and outcomes (given sparse data and the scatter/fit plots above), and fit a natural spline for the lagged response. I decided on looking at lags up to 7 days following the initial smoke event.
 
 Set up list of counties to run through two-stage distributed lag.
 
-
-```{r asthma dist lag analysis, message=F, warning=F, results="asis", eval = F}
-# I need to concatnate the state and counties as there are some counties with
-# the same name in both states
-meta_ts2 <- meta_ts %>%
-  mutate(state_county = paste(state, county, sep = "_")) %>% 
-  group_by(state_county) %>% 
-  # binary smoke lag >15
-  mutate(smk_lag1 = lag(smoke10, 1, order_by = state_county),
-         smk_lag2 = lag(smoke10, 2, order_by = state_county),
-         smk_lag3 = lag(smoke10, 3, order_by = state_county),
-         smk_lag4 = lag(smoke10, 4, order_by = state_county),
-         smk_lag5 = lag(smoke10, 5, order_by = state_county),
-         smk_lag6 = lag(smoke10, 6, order_by = state_county),
-         smk_lag7 = lag(smoke10, 7, order_by = state_county),
-         smk_lag8 = lag(smoke10, 8, order_by = state_county),
-         smk_lag9 = lag(smoke10, 9, order_by = state_county),
-        smk_lag10 = lag(smoke10, 10, order_by = state_county))
-  
-
-# simple distributed lag models
-
-dis_lag_mod <- glmer(asthma_n ~ smoke10 +
-  wrf_temp + (1|day) + (1|county) + (1|state) +  
-  offset(log(population)), meta_ts, family="poisson")
-
-summary(dis_lag_mod)
-
-summary(glmer(hf_n ~ smoke10 + smk_lag1 + smk_lag2 + smk_lag3 + smk_lag4 +
-             smk_lag5 + smk_lag6 + smk_lag7 + (1|day) + (1|county) + (1|state) + 
-             offset(log(population)), meta_ts2,
-             family="poisson"))
-
-# continous pm
-mixed_mod <- glmer(hf_n ~ geo_smk10 + geo_smk_lag1 + geo_smk_lag2 + 
-  geo_smk_lag3 + geo_smk_lag4 + geo_smk_lag5 + geo_smk_lag6 + geo_smk_lag7 +
-  (1|day) + (1|county) + (1|state) + offset(log(population)), meta_ts2,
-  family="poisson" )#, control = glmerControl(optimizer = "bobyqa"))
-
-summary(mixed_mod)
-
-
-```
-
 Distributed lag setup.
 
-```{r two stage dlnm setup, message = F, warning=F}
+```{r two stage dlnm setup, message = F, echo = F, warning=F}
 # create vector of state_county
 counties <- as.character(unique(meta_ts$state_county))
 
@@ -752,52 +670,9 @@ qaic_val <- 0
 ```
 
 
-```{r qaic model fit loop, message=F, warning=F, results="asis"}
+```{r qaic model fit loop, message=F, warning=F, echo = F, results="asis"}
 
 # first stage ----
-# loop for each county
-system.time({
-for(i in seq(county_list_df)) {
-
-  # load county-specific dataframe
-  sub <- county_list_df[[i]]
-
-  # define the cross-basis ----
-  suppressWarnings({
-    # cross-basis for smoke
-  smk_cb <- crossbasis(sub$geo_smk10,lag=lag,argvar=argvar,arglag=arglag)
-  #   # cross-basis for temp
-  # temp_cb <- crossbasis(sub$wrf_temp, lag = lag, argvar = argvar,
-  #                       arglag = arglag)
-  })
-  # run the first stage county-specific models
-  county_model <- glm(asthma_n ~ smk_cb + #temp_cb + 
-                        offset(log(population)), 
-    family = "quasipoisson", sub)
-
-  # alert warning if there are convergence issues
-  converge[i,] <- county_model$converged
-  
-  # reduction to summary results ---
-  # prediction summary for smoke 10 ug/m^3 
-  # uses cross reduce function
-  suppressWarnings({
-    cr_counties <- crossreduce(smk_cb, county_model, type = "var", value = 1)
-  
-    })
-
-  # store results in matrix ---
-  # daily lag results
-  cumulative_counties[i,] <- coef(cr_counties)
-  counties_cov[[i]] <- vcov(cr_counties)
-  # Q-AIC
-  qaic_val[i] <- fqaic(county_model)
-}
-})
-
-# grand q-aic
-sum(qaic_val)
-
 # I'm not certain on time lag yet, but maybe a week makes sense
 lag <- 7
 
@@ -813,6 +688,7 @@ colnames(fit_matrix) <- c("outcome", "exposure", "fit_type", "df", "aic",
                            "n_mod_conv")
 
 system.time(
+  
 # 1st loop: loop through outcomes
 for(q in seq(outcome_names)){
 
@@ -884,7 +760,6 @@ fit_mat <- matrix(NA, nrow = 3, ncol = 6)
         cr_counties <- crossreduce(smk_cb, county_model, type = "var", value = 1)
 
         })
-     # }# end if statement
 
       # store results in matrix ---
       # daily lag results
@@ -895,7 +770,7 @@ fit_mat <- matrix(NA, nrow = 3, ncol = 6)
       qaic_val[i] <- fqaic(county_model)
       
         }, error = function(e){
-          print(names(county_list_df[i]))
+          # print(names(county_list_df[i]))
           }
         ) # end try catch
 
@@ -933,10 +808,13 @@ knitr::kable(lag_spline_best_fit, caption = paste0("Distributed lag spline",
   "degree of freedom best fit by AIC"))
 ```
 
+This table shows the optimal degrees of freedom/knots for the natural spline. Now that the degrees of freedom of the lag spline has been decided by lowest AIC, I'll run the loop for actual results. It also shows how many counties out of the two states were able to converge. Only asthma and broken arm fit better with a 4 DF spline. All other outcomes fit best with a 3 DF spline.
 
-Now that the degrees of freedom of the lag spline has been decided by lowest AIC, I'll run the loop for actual results.
+Note: Oregon county Hood River was not able to run, so I marked as unable to converge.
 
-```{r distributed lag results, message=F, warning=F, results="asis"}
+Following models only adjust for temperature and have a population offset.
+
+```{r distributed lag results, message=F, warning=F, echo = F, results="asis"}
 
 # set estimation method for multivariate approach
 # reml estimation method
@@ -1011,11 +889,11 @@ for(j in 1:length(lag_spline_best_fit$outcome)){
       cumulative_counties[i,] <- coef(cr_counties)
       counties_cov[[i]] <- vcov(cr_counties)
         }, error = function(e){
-          print(names(county_list_df[i]))
+          #print(names(county_list_df[i]))
           }) # end try catch
 
       } # end loop for county estimates
- 
+
   # second stage multivariate meta analysis ---- 
   # For counties with outcomes that will not even run, set their converge
   # from missing to False for subsetting
@@ -1062,27 +940,55 @@ for(j in 1:length(lag_spline_best_fit$outcome)){
 
 }
 
-summary(dist_lag_df)
+
 
 ggplot(dist_lag_df, aes(x=lag, y=rel_risk)) +
   geom_line(colour = "blue") +
   geom_ribbon(aes(ymin = lower_95, ymax = upper_95), fill = "blue", alpha = 0.3) + 
-  scale_y_continuous(limits = c(0.8, 1.2)) +
+  scale_y_continuous(limits = c(0.9, 1.15)) +
   scale_x_continuous(breaks = c(seq(0, 7,by=1))) +
   geom_hline(yintercept = 1, linetype = 2, colour = "red") +
   facet_wrap(~ outcome) +
+  ggtitle(paste0("Distributed lag association between a 10 ug/m^3",
+                 " increase in GWR smoke PM2.5 and cardiopulmonary outcomes")) +
+  ylab("Relative Risk for a 10 ug/m^3 increase in GWR smoke (fixed)") +
+  xlab("Lagged Days") +
   theme_bw()
 
+ggplot(dist_lag_df, aes(x=lag, y=rel_risk)) +
+  geom_line(colour = "blue") +
+  geom_ribbon(aes(ymin = lower_95, ymax = upper_95), fill = "blue", alpha = 0.3) + 
+  scale_x_continuous(breaks = c(seq(0, 7,by=1))) +
+  geom_hline(yintercept = 1, linetype = 2, colour = "red") +
+  facet_wrap(~ outcome, scale = "free_y") +
+  ggtitle(paste0("Distributed lag association between a 10 ug/m^3",
+                 " increase in GWR smoke PM2.5 and cardiopulmonary outcomes")) +
+  ylab("Relative Risk for a 10 ug/m^3 increase in GWR smoke (free)") +
+  xlab("Lagged Days") +
+  theme_bw()
 
 ```
 
-Had some convergence issues. I need to try and figure out a way to find the models that won't converge. Next step would be to try and better understand what's going on, and extend to other outcomes. Maybe look at effect modification by age (age strata)?
+These distributed lag plots show the cumulative association of GWR smoke exposure on cardiopulmonary outcomes. I think the are cumulative associations. I thought I called the right estimate from the crossprediction function from the dlnm package, but they were exactly the same as the same day estimates. So I'm not quite sure if it's entirely right. I think under certain situations, they are the same, according to some notes in the package. I'll look in to this. Ander may be able to help too. These interpretations need work (first step would be to figure out if this is a cumulative delayed effect or a delay effect after a single day of exposure).
+
+My general interpreation is that ER respiratory visits are increased on the same day of smoke exposure, decay a bit to baseline levels, and then increase maybe 5 to 7 days after exposure. The most pronounced association with increasing smoke is for the outcome of asthma. Where on the same day of elevated exposure to smoke, a 10 ug/m^3 increase in PM2.5 is associated with a ~10% increase in asthma ER visits. This increased risk slowly decays over the next couple days back to referent levels, but may increase again 4 to 6 days of repeated smoke exposure. COPD ER visits appear to increase by maybe ~3% after increased smoke exposure, and maintain that increased risk up to a week after. Pneumonia also follows a similar pattern. 
+
+Risk for CVD ER visits may also be elevated on the first day of smoke exposure, return to baseline, but then may be meaningfully elevated roughly 6 days after exposre. As for the specific CVD outcomes, both the risk of IHD and myocardial infarction may be increased around 6 days after a 10 ug/m^3 increase in smoke exposure.
 
 
-Thoughts:
-For each outcome, I need to loop through degrees of freedom to find the best AIC (lowest) for the fit of spline for the lag.
+### Some notes to improve this work as we go along:
 
-Once the best spline fit is found, then i'll produce figures.
+Consider adding urgent care visits as well. We thought maybe urgent care might be slighty different in Oregon so did not include it, but it would give us more events in counties. Also consider adding a weekday or day covariate to the two-stage lag models. I did not because I feared even more counties would not converge if we did. Weekend indicator might be a better choice though if DF in the county-level models are an issue.
+
+I decided to look at lags only for a week after. Not sure we can go longer than a week given the amount of time-series data we have. 
+
+Had some convergence issues for county-specific models. I need to try and figure out a way to find the models that won't converge. Ander had said this same process can be done in a mixed model rather than a two-stage process. That might help me avoid excluding counties that don't converge in the first stage and use more available data.
+
+Next step would be to try and better understand what's going on, and extend to other outcomes. I believe it would also be useful in the grand scheme of the project to look at age groups, but more importantly different age groups. I can get counts by age groups. We will need to see how population is parsed out in categories for the census which would define our population offset (my categories will depend on census categories).
+
+Add Colorado counties and as many years as possible. Add 2015 Washington. Clean code once Ander approves of the statistical process so Rish can feed in mortality counts.
+
+
 
 
 
