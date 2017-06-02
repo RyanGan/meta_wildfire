@@ -1005,16 +1005,18 @@ str(smk_matrix)
 
 # set spline
 smk_basis <- ns(smk_matrix, df = 4, intercept = T)
+tail(smk_basis)
 str(smk_basis)
 # vector of days
 st <- as.vector(0:7)
 
 beta_st <- st %o% smk_basis
+str(beta_st)
 # output vector of asthma counts
 asthma_counts <- meta_ts2$asthma_n
 
 length(beta_st)
 # try out model
-asthma_mod <- glm(asthma_counts ~ beta_st, family = "poisson")
-
+asthma_mod <- glm(asthma_counts ~ smk_basis, family = "poisson")
+str(smk_basis)
 ```
