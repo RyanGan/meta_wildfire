@@ -1012,21 +1012,30 @@ pm_b <- smk_matrix %*% b
 # output asthma counts
 asthma_counts <- meta_ts2$asthma_n
 # fit mixed model
-mod <- glmer(asthma_n ~  pm_b + wrf_temp + (1|state_county) + offset(log(population)), meta_ts2, family="poisson")
+mod <- glmer(asthma_n ~  pm_b + wrf_temp + (1|state_county) + offset(log(population)), meta_ts2, 
+             family="poisson", control = glmerControl(optimizer = "bobyqa"))
 
 # output distributed lag beta parameters
 dlparms <- mod@beta[2:5]
+# estimate distributed lag values for each day
 dl_estimates <- data.frame(estimate = b %*% dlparms)
-exp(dl_estimates)
-exp(sum(dl_estimates))
 
+# covariance matrix for knots (need to convert to matrix object)
+cov_mat <- as.matrix(vcov(mod)[2:5,2:5]) 
+
+# estimate variance of splines
+dl_var <- b%*%cov_mat%*%t(b)
+
+# calculate standard error for each lag value
+dl_estimates$stderr <- sqrt(diag(dl_var))
+
+# calculate lower and upper bounds
+dl_estimates$lower_bound <- dl_estimates$estimate + dl_estimates$stderr * 
+  
 str(mod)
-
-vcov(mod)
-# estimate distributed lag values
-dl_estimates <- data.frame(estimate = b %*% dlparms)
-# estimate variance matrix
-dl_var <- b %*% vcov(mod)[dlparms,dlparms]
+  
+qt(1-0.975, df=)  
+dl_estimates
 
 n <- 100
 lag_max <- 7
