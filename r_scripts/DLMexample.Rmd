@@ -1,0 +1,121 @@
+---
+title: "DLM Example"
+author: "Ander Wilson"
+date: "6/2/2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Simulate example data
+
+```{r simdat}
+n <- 100
+lag_max <- 7
+
+# simulate lagged PM (iid normal)
+pm <- data.frame(l0 = rnorm(n))
+for(l in 1:lag_max){
+  pm[,paste0("l",l)] <- c(pm[-c(1),paste0("l",l-1)],rnorm(1))
+}
+pm <- as.matrix(pm)
+
+# true DL function
+DLfunc <- exp(-(0:lag_max)/2)
+
+# simulate outcomes
+y <- drop(pm%*%DLfunc) + rnorm(n)
+```
+
+
+## Setup DLM
+
+Here we setup the spline basis for the DLM.  I use natrual splines as the default but B-splines can be good and many other approaches work. Usually the degrees of freedom are small, maybe 3 or 4.
+```{r setupdlmbasis}
+library(splines)
+
+B <- ns(0:lag_max, df =4, intercept=TRUE)
+
+# the nrow B should equal ncol(pm)
+dim(B)
+dim(pm)
+```
+
+
+## Estiamte DLM with a linear model
+
+First premultiple the lagged PM matrix by the basis
+```{r premultiply}
+pmB <- pm%*%B
+```
+
+Now estimate using the premultiplied exposures as the predictors. You can use a GLM or mixed model.
+```{r estimatedlm}
+fit <- lm(y~pmB)
+```
+
+The estimated regression coefficients are meaningless. Do not interpret them.
+```{r coefs}
+coef(fit)
+```
+
+
+## Find the estimates of the DL function
+
+The point estimate is as follows. Note that it is the same length as the number of lags.
+```{r pointest}
+dlparms <- grep("pmB",names(coef(fit)))
+DLestimate<- data.frame(estimate=B%*%coef(fit)[dlparms])
+```
+
+The variance matrix for the DL evaluated at each lagged time is as follows.
+```{r var}
+DLvar <- B%*%vcov(fit)[dlparms,dlparms]%*%t(B)
+```
+
+The standard errors at each point are as follows.
+```{r sd}
+DLestimate$SE <- sqrt(diag(DLvar))
+```
+
+
+The pointwise confidence interval assuming a  is
+```{r ci}
+DLestimate$lower <- DLestimate$estimate + DLestimate$SE * qt(1-0.975, df=fit$df.residual)
+DLestimate$upper <- DLestimate$estimate + DLestimate$SE * qt(0.975, df=fit$df.residual)
+```
+
+See estimates.
+```{r DLestimates}
+DLestimate
+```
+
+
+## Plot the DL function
+
+
+```{r plt}
+library(ggplot2)
+DLestimate$lag <- 0:lag_max
+DLestimate$truth <- DLfunc
+p <- ggplot(DLestimate, aes(x=lag, y=estimate, ymin=lower, ymax=upper))
+p <- p + geom_ribbon(alpha=.5) + geom_line(size=2)
+p <- p + geom_line(aes(x=lag, y=truth), linetype=2, size=2)
+p <- p + theme_bw()
+p
+```
+
+
+## Cumulative effect
+The cumulative effect is the sum of the effect over all days.
+
+```{r cumulative}
+cumulative <- sum(DLestimate$estimate)
+cumulative
+cumulative_se <- sqrt(sum(DLvar))
+cumulative_se
+cumulative_CI <- cumulative + cumulative_se * qt(c(1-0.975,0.975), df=fit$df.residual)
+cumulative_CI
+```
