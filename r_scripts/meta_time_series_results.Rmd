@@ -1030,27 +1030,11 @@ dl_var <- b%*%cov_mat%*%t(b)
 dl_estimates$stderr <- sqrt(diag(dl_var))
 
 # calculate lower and upper bounds
-dl_estimates$lower_bound <- dl_estimates$estimate + dl_estimates$stderr * 
-  
-str(mod)
-  
-qt(1-0.975, df=)  
+dl_estimates$lower_bound <- dl_estimates$estimate + dl_estimates$stderr * qt(1-0.975, df=df.residual(mod))  
+dl_estimates$upper_bound <- dl_estimates$estimate + dl_estimates$stderr * qt(0.975, df=df.residual(mod))  
+
+
+
 dl_estimates
-
-n <- 100
-lag_max <- 7
-
-# simulate lagged PM (iid normal)
-pm <- data.frame(l0 = rnorm(n))
-for(l in 1:lag_max){
-  pm[,paste0("l",l)] <- c(pm[-c(1),paste0("l",l-1)],rnorm(1))
-}
-pm <- as.matrix(pm)
-
-# true DL function
-DLfunc <- exp(-(0:lag_max)/2)
-
-# simulate outcomes
-y <- drop(pm%*%DLfunc) + rnorm(n)
 
 ```
