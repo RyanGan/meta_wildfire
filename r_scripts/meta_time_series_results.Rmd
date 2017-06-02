@@ -990,33 +990,58 @@ Next step would be to try and better understand what's going on, and extend to o
 Add Colorado counties and as many years as possible. Add 2015 Washington. Clean code once Ander approves of the statistical process so Rish can feed in mortality counts.
 
 ### Estimate Distributed Lags Without DLNM package
-Create own basis expansion.
+Create own basis expansion and distributed lag model.
 
 ```{r basis function, echo=F, warning=F}
-glimpse(meta_ts)
-
 # reduce to complete cases
 meta_ts2 <- meta_ts %>% filter(complete.cases(.))
 summary(meta_ts2)
 
 # output matrix of smoke and lag variables
 smk_matrix <- as.matrix(meta_ts2[, c(28, 35:41)])
-str(smk_matrix)
 
-# set spline
-smk_basis <- ns(smk_matrix, df = 4, intercept = T)
-tail(smk_basis)
-str(smk_basis)
-# vector of days
-st <- as.vector(0:7)
+# define basis b using natural spline function
+b <- ns(0:7, df = 4, intercept = T)
 
-beta_st <- st %o% smk_basis
-str(beta_st)
-# output vector of asthma counts
+# row dimension of b should equal number of lag columns
+dim(b)
+dim(smk_matrix)
+# multiply lagged pm matrix by basis
+pm_b <- smk_matrix %*% b
+
+# output asthma counts
 asthma_counts <- meta_ts2$asthma_n
+# fit mixed model
+mod <- glmer(asthma_n ~  pm_b + wrf_temp + (1|state_county) + offset(log(population)), meta_ts2, family="poisson")
 
-length(beta_st)
-# try out model
-asthma_mod <- glm(asthma_counts ~ smk_basis, family = "poisson")
-str(smk_basis)
+# output distributed lag beta parameters
+dlparms <- mod@beta[2:5]
+dl_estimates <- data.frame(estimate = b %*% dlparms)
+exp(dl_estimates)
+exp(sum(dl_estimates))
+
+str(mod)
+
+vcov(mod)
+# estimate distributed lag values
+dl_estimates <- data.frame(estimate = b %*% dlparms)
+# estimate variance matrix
+dl_var <- b %*% vcov(mod)[dlparms,dlparms]
+
+n <- 100
+lag_max <- 7
+
+# simulate lagged PM (iid normal)
+pm <- data.frame(l0 = rnorm(n))
+for(l in 1:lag_max){
+  pm[,paste0("l",l)] <- c(pm[-c(1),paste0("l",l-1)],rnorm(1))
+}
+pm <- as.matrix(pm)
+
+# true DL function
+DLfunc <- exp(-(0:lag_max)/2)
+
+# simulate outcomes
+y <- drop(pm%*%DLfunc) + rnorm(n)
+
 ```
