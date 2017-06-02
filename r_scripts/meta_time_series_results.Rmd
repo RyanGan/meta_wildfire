@@ -30,6 +30,7 @@ library(maps)
 # two-stage distributed lag model libraries
 library(dlnm)
 library(mvmeta)
+library(splines)
 ```
 
 Read in meta time series data.
@@ -988,7 +989,32 @@ Next step would be to try and better understand what's going on, and extend to o
 
 Add Colorado counties and as many years as possible. Add 2015 Washington. Clean code once Ander approves of the statistical process so Rish can feed in mortality counts.
 
+### Estimate Distributed Lags Without DLNM package
+Create own basis expansion.
 
+```{r basis function, echo=F, warning=F}
+glimpse(meta_ts)
 
+# reduce to complete cases
+meta_ts2 <- meta_ts %>% filter(complete.cases(.))
+summary(meta_ts2)
 
+# output matrix of smoke and lag variables
+smk_matrix <- as.matrix(meta_ts2[, c(28, 35:41)])
+str(smk_matrix)
 
+# set spline
+smk_basis <- ns(smk_matrix, df = 4, intercept = T)
+str(smk_basis)
+# vector of days
+st <- as.vector(0:7)
+
+beta_st <- st %o% smk_basis
+# output vector of asthma counts
+asthma_counts <- meta_ts2$asthma_n
+
+length(beta_st)
+# try out model
+asthma_mod <- glm(asthma_counts ~ beta_st, family = "poisson")
+
+```
