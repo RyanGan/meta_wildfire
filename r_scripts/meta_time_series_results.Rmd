@@ -806,7 +806,7 @@ lag_spline_best_fit <- as_tibble(fit_matrix) %>%
 
 # kable
 knitr::kable(lag_spline_best_fit, caption = paste0("Distributed lag spline",
-  "degree of freedom best fit by AIC"))
+  "degree of freedom best fit by AIC for two-stage approach"))
 ```
 
 This table shows the optimal degrees of freedom/knots for the natural spline. Now that the degrees of freedom of the lag spline has been decided by lowest AIC, I'll run the loop for actual results. It also shows how many counties out of the two states were able to converge. Only asthma and broken arm fit better with a 4 DF spline. All other outcomes fit best with a 3 DF spline.
@@ -942,7 +942,6 @@ for(j in 1:length(lag_spline_best_fit$outcome)){
 }
 
 
-
 ggplot(dist_lag_df, aes(x=lag, y=rel_risk)) +
   geom_line(colour = "blue") +
   geom_ribbon(aes(ymin = lower_95, ymax = upper_95), fill = "blue", alpha = 0.3) + 
@@ -953,18 +952,6 @@ ggplot(dist_lag_df, aes(x=lag, y=rel_risk)) +
   ggtitle(paste0("Distributed lag association between a 10 ug/m^3",
                  " increase in GWR smoke PM2.5 and cardiopulmonary outcomes")) +
   ylab("Relative Risk for a 10 ug/m^3 increase in GWR smoke (fixed)") +
-  xlab("Lagged Days") +
-  theme_bw()
-
-ggplot(dist_lag_df, aes(x=lag, y=rel_risk)) +
-  geom_line(colour = "blue") +
-  geom_ribbon(aes(ymin = lower_95, ymax = upper_95), fill = "blue", alpha = 0.3) + 
-  scale_x_continuous(breaks = c(seq(0, 7,by=1))) +
-  geom_hline(yintercept = 1, linetype = 2, colour = "red") +
-  facet_wrap(~ outcome, scale = "free_y") +
-  ggtitle(paste0("Distributed lag association between a 10 ug/m^3",
-                 " increase in GWR smoke PM2.5 and cardiopulmonary outcomes")) +
-  ylab("Relative Risk for a 10 ug/m^3 increase in GWR smoke (free)") +
   xlab("Lagged Days") +
   theme_bw()
 
@@ -992,10 +979,12 @@ Add Colorado counties and as many years as possible. Add 2015 Washington. Clean 
 ### Estimate Distributed Lags Without DLNM package
 Create own basis expansion and distributed lag model.
 
-```{r basis function, echo=F, warning=F}
+```{r basis function with asthma, echo=F, warning=F}
 # reduce to complete cases
-meta_ts2 <- meta_ts %>% filter(complete.cases(.))
-summary(meta_ts2)
+meta_ts2 <- meta_ts %>% filter(complete.cases(.)) %>% 
+  # transforming wrf_temp to avoid eigen issues
+  mutate(wrf_temp_sd = wrf_temp/sd(wrf_temp))
+
 
 # output matrix of smoke and lag variables
 smk_matrix <- as.matrix(meta_ts2[, c(28, 35:41)])
@@ -1012,9 +1001,12 @@ pm_b <- smk_matrix %*% b
 # output asthma counts
 asthma_counts <- meta_ts2$asthma_n
 # fit mixed model
-mod <- glmer(asthma_n ~  pm_b + wrf_temp + (1|state_county) + offset(log(population)), meta_ts2, 
+mod <- glmer(asthma_n ~  pm_b + wrf_temp_sd + (1|state_county) + offset(log(population)), meta_ts2, 
              family="poisson", control = glmerControl(optimizer = "bobyqa"))
 
+summary(mod)
+# check AIC
+AIC(mod)
 # output distributed lag beta parameters
 dlparms <- mod@beta[2:5]
 # estimate distributed lag values for each day
@@ -1030,11 +1022,216 @@ dl_var <- b%*%cov_mat%*%t(b)
 dl_estimates$stderr <- sqrt(diag(dl_var))
 
 # calculate lower and upper bounds
-dl_estimates$lower_bound <- dl_estimates$estimate + dl_estimates$stderr * qt(1-0.975, df=df.residual(mod))  
-dl_estimates$upper_bound <- dl_estimates$estimate + dl_estimates$stderr * qt(0.975, df=df.residual(mod))  
+dl_estimates$lower_bound <- dl_estimates$estimate+dl_estimates$stderr*qt(1-0.975,
+  df=df.residual(mod))  
+dl_estimates$upper_bound <- dl_estimates$estimate+dl_estimates$stderr*qt(0.975,
+  df=df.residual(mod))  
 
 
+# estimate relative risk and 95%CI from beta
+asthma_dl_rr <- dl_estimates %>% 
+  mutate(estimate = exp(estimate),
+         lower_bound = exp(lower_bound),
+         upper_bound = exp(upper_bound),
+         lag = 0:7)
 
-dl_estimates
+# estimate cumulative effect
+cumulative <- sum(dl_estimates$estimate)
+cumulative
+
+# estimate cumulative effect stnd error
+cumulative_se <- sqrt(sum(dl_var))
+cumulative_se
+
+# estimate cumulative CI
+cumulative_ci <- cumulative+cumulative_se*qt(c(1-0.975,0.975), 
+                                             df=df.residual(mod))
+cumulative_ci
+
+exp(cumulative)
+exp(cumulative_ci)
+
+# plot 
+p <- ggplot(asthma_dl_rr, aes(x=lag, y=estimate, 
+                              ymin=lower_bound, ymax=upper_bound)) +
+  geom_ribbon(alpha = 0.5) +
+  geom_line(size=2)
+
+p
+```
+
+Writing loop for distributed lag. I suspect that the number of df/knots will be the same with the mixed model, but I'll run it again to make sure. Benefit of the mixed model is that I can include some of the sparsely populated counties that failed to converge in the two stage approach. Although the level of detail is only by day so the lines to appear as smooth. Ander may be able to help with this.
+
+```{r mixed mod aic fit, message=F, warning=F, results="asis"}
+# outcomes to loop through
+# create outcome list to loop through
+outcome_names <- colnames(meta_ts2[,which(colnames(meta_ts2)=="resp_n"):
+  which(colnames(meta_ts2)=="broken_arm_n")])
+
+# create fit matrix
+fit_matrix <- matrix(NA, nrow=0, ncol=5)
+colnames(fit_matrix) <- c("outcome", "exposure", "fit_type", "df", "aic")
+
+system.time(
+  
+# 1st loop: loop through outcomes
+for(q in seq(outcome_names)){
+
+# 2nd loop: vary degrees of freedom for lag knots
+# set up empty matrix to assess model fit
+fit_mat <- matrix(NA, nrow = 3, ncol = 5) 
+
+# fill outcome name in first column
+fit_mat[,1] <- outcome_names[q]
+# fill in exposure (geo smoke)
+fit_mat[,2] <- "geo_smk10"
+# fit type
+fit_mat[,3] <- "ns"
+  
+# 2 df will not work for a spline, going from 3 to 6 df
+  for(h in 3:5){ # start loop for df
+
+    # fitting a natural spline for lag with 5 knots?
+    fit_mat[h-2, 4] <- degree_freedom <- h
+
+    # define basis b using natural spline function
+    b <- ns(0:7, df = degree_freedom, intercept = T)
+    
+    # multiply lagged pm matrix by basis
+    pm_b <- smk_matrix %*% b
+    
+    # fit mixed model
+    mod <- glmer(as.formula(paste0(outcome_names[q], "~pm_b+wrf_temp_sd+
+      (1|state_county)+offset(log(population))")), meta_ts2, 
+      family="poisson", control = glmerControl(optimizer = "bobyqa"))
+    
+    # fill AIC
+    fit_mat[h-2,5] <- round(AIC(mod),2)
+
+    } # end model fit loop
+  
+  fit_matrix <- rbind(fit_matrix, fit_mat)
+
+}) # end outcome loop and system time
+
+# now that we have a range of df/knots, I want to filter to the minimum aic
+# for each outcome and print out that value in a table
+
+lag_spline_best_fit <- as_tibble(fit_matrix) %>%  
+  group_by(outcome) %>% 
+  slice(which.min(aic))
+
+# kable
+knitr::kable(lag_spline_best_fit, caption = paste0("Distributed lag spline",
+  "degree of freedom best fit by AIC for mixed model approach"))
 
 ```
+
+Note I get some warnings (including max grade convergence issues), slightly different answers in best fit, and it takes about 18 minutes to run. Consider running in parallel.
+
+I suspect the convergence issues are likely due to the same state/counties with small sample size and few outcome observations and lack of variability between exposure/outcome.
+
+Going to fit what I have now, take a walk, and see what comes out. First thing to do is find cumulative effect, then lagged day effects.
+
+```{r mixed mod results, warning=F, message=F, results="asis"}
+
+# create a dataframe that contains cumulative estimates for each outcome
+cumulative_df <- as_tibble(matrix(NA, nrow=0, ncol=4))
+colnames(cumulative_df) <- c("outcome", "rel_risk", "lower_95", "upper_95")
+
+# create a dataframe that contains the distributed lag estimates for each outcome
+dist_lag_df <- as_tibble(matrix(NA,  nrow = 0, ncol = 5))
+colnames(dist_lag_df) <- c("outcome", "lag", "rel_risk", 
+                                  "lower_95", "upper_95")
+
+# loop through best fit df
+for(j in 1:length(lag_spline_best_fit$outcome)){
+    
+    # create empty matrix two empty matrices to fill
+    cumul_val <- as_tibble(matrix(NA, nrow=1, ncol=4))
+    colnames(cumul_val) <- c("outcome", "rel_risk", "lower_95", "upper_95")
+    
+    dl_val <- as_tibble(matrix(NA, nrow=8, ncol=5))
+    colnames(dl_val) <- c("outcome", "lag", "rel_risk", 
+                                  "lower_95", "upper_95")
+    
+    # easiest to set out the parameters from the start
+    outcome <- lag_spline_best_fit$outcome[j]
+    degree_freedom <- as.numeric(lag_spline_best_fit$df[j])
+
+    # define basis b using natural spline function
+    b <- ns(0:7, df = degree_freedom, intercept = T)
+    
+    # multiply lagged pm matrix by basis
+    pm_b <- smk_matrix %*% b
+    
+    # fit mixed model
+    mod <- glmer(as.formula(paste0(outcome, "~pm_b+wrf_temp_sd+
+      (1|state_county)+offset(log(population))")), meta_ts2, 
+      family="poisson", control = glmerControl(optimizer = "bobyqa"))
+
+    mod
+    # output distributed lag beta parameters; this will change based on DF
+    dlparms <- mod@beta[2:(1+degree_freedom)]
+    # estimate distributed lag values for each day
+    dl_estimates <- data.frame(estimate = b %*% dlparms)
+    
+    # covariance matrix for knots (need to convert to matrix object)
+    cov_mat <- as.matrix(vcov(mod)[2:(1+degree_freedom),2:(1+degree_freedom)]) 
+    # estimate variance of splines
+    dl_var <- b%*%cov_mat%*%t(b)
+    # calculate standard error for each lag value
+    dl_estimates$stderr <- sqrt(diag(dl_var))
+    # calculate lower and upper bounds
+    dl_estimates$lower_bound <- dl_estimates$estimate+dl_estimates$stderr*qt(1-0.975,
+      df=df.residual(mod))  
+    dl_estimates$upper_bound <- dl_estimates$estimate+dl_estimates$stderr*qt(0.975,
+      df=df.residual(mod))  
+    
+    # estimate cumulative effect ----
+    cumulative <- sum(dl_estimates$estimate)
+    # estimate cumulative effect stnd error
+    cumulative_se <- sqrt(sum(dl_var))
+    # estimate cumulative CI
+    cumulative_ci <- cumulative+cumulative_se*qt(c(1-0.975,0.975), 
+                                                 df=df.residual(mod))
+    # fill tibbles and bind in to larger dataframes ----
+    # outcome
+    cumul_val[1,1] <- outcome
+    # cumulative rel risk
+    cumul_val[1,2] <- exp(cumulative)
+    # cumulative 95% CI
+    cumul_val[1,3:4] <- exp(cumulative_ci)
+    # bind to cumulative dataframe
+    cumulative_df <- rbind(cumulative_df, cumul_val)
+
+    # lag vals (this step is redundant)
+    dl_val[,1] <- outcome
+    dl_val[,2] <- 0:7
+    dl_val[,3] <- exp(dl_estimates[,1])
+    dl_val[,4] <- exp(dl_estimates[,3])
+    dl_val[,5] <- exp(dl_estimates[,4])
+    
+    # bind in with overall df
+    dist_lag_df <- rbind(dist_lag_df, dl_val)
+} # end loop
+
+# print table of cumulative effects
+knitr::kable(cumulative_df, caption = paste0("Cumulative Effect for a 10 ug/m^3 increase in GWR smoke lagged days 0-7 mixed model approach"))
+
+# plot distributed lag effects
+ggplot(dist_lag_df, aes(x=lag, y=rel_risk)) +
+  geom_line(colour = "blue") +
+  geom_ribbon(aes(ymin = lower_95, ymax = upper_95), fill = "blue", alpha = 0.3) + 
+  scale_y_continuous(limits = c(0.8, 1.2)) +
+  scale_x_continuous(breaks = c(seq(0, 7,by=1))) +
+  geom_hline(yintercept = 1, linetype = 2, colour = "red") +
+  facet_wrap(~ outcome) +
+  ggtitle(paste0("Distributed lag association between a 10 ug/m^3",
+                 " increase in GWR smoke PM2.5 and cardiopulmonary outcomes")) +
+  ylab("Relative Risk for a 10 ug/m^3 increase in GWR smoke (fixed)") +
+  xlab("Lagged Days") +
+  theme_bw()
+```
+
+Some results are similar to the two-stage approach. Ander suggests only interpreting lagged days if the cumulative effect is meaningful. Only asthma and all respiratory have significant cumulative effects. I think I might leave out broken arm for presentations to avoid confusion as there may be a protective effect 5 to 6 days after smoke exposure, which may make sense biologically if people do not go outside. There may be more meaningful associations the more states/years we include.
