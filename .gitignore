@@ -8,3 +8,5 @@ data/
 *.Rproj
 
 *.html
+
+meta_time_series_results_files/
