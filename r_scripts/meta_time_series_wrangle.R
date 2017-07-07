@@ -13,7 +13,7 @@ library(tidyverse)
 # oregon health outcomes time series 2013
 or_health <- read_csv("./data/or_2013_county_er_time_series.csv") 
 # oregon smk time series 
-or_smk <- read_csv("./data/or_county_pop_wt_pm.csv") %>% 
+or_smk <- read_csv("./data/or_2013_county_pop_wt_pm.csv") %>% 
   mutate(fips = as.character(fips))
 # oregon county pop
 or_county_pop <- read_csv("./data/or_census_pop_est_county.csv") %>% 
@@ -35,7 +35,7 @@ or_county_pop <- read_csv("./data/or_census_pop_est_county.csv") %>%
 # washington health outcomes time series 2012
 wa_health <- read_csv("./data/wa_2012_county_er_time_series.csv")
 # washington smk time series
-wa_smk <- read_csv("./data/wa_county_pop_wt_pm.csv")
+wa_smk <- read_csv("./data/wa_2012_county_pop_wt_pm.csv")
 # county population estimates
 wa_county_pop <- read_csv("./data/wa_census_pop_est_county.csv") %>% 
     # cleaning up data
