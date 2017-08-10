@@ -36,7 +36,7 @@ library(splines)
 Read in meta time series data.
 
 ```{r read data, message = F, warning = F, echo = F}
-meta_ts <- read_csv("../data/meta_timeseries.csv") %>% 
+meta_ts <- read_csv("./data/meta_timeseries.csv") %>% 
   # creating 10 unit increase var of geo smoke and day of week
   mutate(geo_smk10 = geo_smk_pm/10,
          day = weekdays(date),
@@ -86,13 +86,13 @@ state_outcome_rate <- meta_ts %>% group_by(state, date) %>%
   # remove columns I don't want to calculate
   select(-fips, -county) %>% 
   # add up outcomes in each county
-  summarise_each(funs(sum), population, n_obs:broken_arm_n) %>% 
-  mutate_each(funs((./population*100000)), n_obs:broken_arm_n) 
+  summarise_at(vars(population, n_obs:broken_arm_n), sum) %>% 
+  mutate_at(vars( n_obs:broken_arm_n), funs((./population*100000))) 
 
 # average of environmental measures, joined with outcomes
 state_smoke <- meta_ts %>% group_by(state, date) %>% 
   select(-fips, -county) %>% 
-  summarise_each(funs(mean, median, min, max), wrf_pm:wrf_temp) %>% 
+  summarise_at(vars(wrf_pm:wrf_temp), funs(mean, median, min, max)) %>% 
   full_join(state_outcome_rate, by = c("state", "date"))
 
 ```
@@ -598,6 +598,18 @@ ggplot(rr_df, aes(x=outcome, y = rel_risk, colour = group)) +
   ggtitle("Relative Risk for a 10ug/m^3 increase PM2.5 estimated via GWR Smoke")
 ```
 
+## Interaction
+
+Trying out interaction to see if anything is there.
+
+```{r interaction exploration}
+summary(meta_ts)
+int_mod <- glmer(cvd_n ~ geo_wt_pm + smoke10 + geo_wt_pm*smoke10 +  
+  (1|state_county), data=meta_ts,family="poisson")
+summary(int_mod)
+```
+
+There might be evidence, but could be sample size challenged here. 
 
 ### Two-Stage Distributed Lag 
 
