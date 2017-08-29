@@ -604,7 +604,7 @@ Trying out interaction to see if anything is there.
 
 ```{r interaction exploration}
 summary(meta_ts)
-int_mod <- glmer(cvd_n ~ geo_wt_pm + smoke10 + geo_wt_pm*smoke10 +  
+int_mod <- glmer(asthma_n ~ geo_wt_pm + smoke10 + geo_wt_pm*smoke10 + wrf_temp +  
   (1|state_county), data=meta_ts,family="poisson")
 summary(int_mod)
 ```
