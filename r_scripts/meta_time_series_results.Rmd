@@ -158,10 +158,14 @@ or_smk_plot <- ggplot(or_smk, aes(x = date, y = pm)) +
   ggtitle("Oregon: 2013 Fire Season Smoke PM2.5") +
   ylab("Smoke PM2.5 ug/m^3") +
   xlab("Year: 2013") +
-  theme_bw()
+  theme(panel.background = element_rect(fill = 'white', colour = 'black'),
+    strip.text = element_text(size = 8),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    strip.background = element_rect(colour=NA, fill=NA),
+    legend.position = "bottom")
 
 or_smk_plot
-
 ```
 
 Seems like the southwest portion of Oregon was affected by smoke where the rest of the state did not have much smoke exposure. The smoke exposure timeframe also appears to have a smaller window of time on which it affected the area.
@@ -284,7 +288,6 @@ smoke_map <- ggplot(or_smk_df, aes(x=long, y=lat, group=group)) +
     strip.background = element_rect(colour=NA, fill=NA))
 
 smoke_map
-
 ```
 
 
@@ -1146,7 +1149,6 @@ I suspect the convergence issues are likely due to the same state/counties with 
 Going to fit what I have now, take a walk, and see what comes out. First thing to do is find cumulative effect, then lagged day effects.
 
 ```{r mixed mod results, warning=F, message=F, results="asis"}
-
 # create a dataframe that contains cumulative estimates for each outcome
 cumulative_df <- as_tibble(matrix(NA, nrow=0, ncol=4))
 colnames(cumulative_df) <- c("outcome", "rel_risk", "lower_95", "upper_95")
@@ -1227,23 +1229,261 @@ for(j in 1:length(lag_spline_best_fit$outcome)){
     # bind in with overall df
     dist_lag_df <- rbind(dist_lag_df, dl_val)
 } # end loop
-
-# print table of cumulative effects
-knitr::kable(cumulative_df, caption = paste0("Cumulative Effect for a 10 ug/m^3 increase in GWR smoke lagged days 0-7 mixed model approach"))
-
-# plot distributed lag effects
-ggplot(dist_lag_df, aes(x=lag, y=rel_risk)) +
-  geom_line(colour = "blue") +
-  geom_ribbon(aes(ymin = lower_95, ymax = upper_95), fill = "blue", alpha = 0.3) + 
-  scale_y_continuous(limits = c(0.8, 1.2)) +
-  scale_x_continuous(breaks = c(seq(0, 7,by=1))) +
-  geom_hline(yintercept = 1, linetype = 2, colour = "red") +
-  facet_wrap(~ outcome) +
-  ggtitle(paste0("Distributed lag association between a 10 ug/m^3",
-                 " increase in GWR smoke PM2.5 and cardiopulmonary outcomes")) +
-  ylab("Relative Risk for a 10 ug/m^3 increase in GWR smoke (fixed)") +
-  xlab("Lagged Days") +
-  theme_bw()
 ```
 
+Cumulative effect estimates for respiratory
+
+```{r cumulative effects results resp}
+# print table of cumulative effects
+knitr::kable(cumulative_df, 
+caption = paste0("Cumulative Effect for a 10 ug/m^3 increase in GWR smoke ",
+  "lagged days 0-7 mixed model approach"))
+
+resp_results <- cumulative_df %>% 
+  filter(outcome == "resp_n" | outcome == "acute_bronch_n" | 
+    outcome == "asthma_n" | outcome == "copd_n" | outcome == "pneum_n") %>% 
+  mutate(levels = c(5,2,3,4,1),
+    name = c("Acute Bronchitis", "Asthma", "COPD", "Pneumonia", "All Respiratory")) %>% 
+  arrange(levels) %>% 
+  mutate(outcome = factor(name, name))
+
+# plot
+resp_plot <- ggplot(resp_results, aes(x=outcome, y = rel_risk)) +
+  geom_point(colour = "darkblue") +
+  geom_text(aes(label = round(rel_risk,2)), hjust = -0.25) +
+  geom_errorbar(aes(ymin=lower_95, ymax=upper_95), colour= "darkblue", width = 0.2) +
+  geom_hline(yintercept = 1, linetype = 2, colour = "red") +
+  theme(
+   panel.background = element_rect(fill = 'white', colour = 'black'),
+   panel.grid.major = element_blank(),
+   panel.grid.minor = element_blank()) +
+  ylab(expression("Cumulative relative risk for a 10 ug/m^3 increase smoke PM"[2.5])) +
+  xlab("Respiratory Outcome") 
+
+resp_plot
+```
+
+Distributed lag effects for respiratory outcomes.
+
+```{r distributed lag results resp}
+resp_lag_df <- dist_lag_df %>% 
+    filter(outcome == "resp_n" | outcome == "acute_bronch_n" | 
+    outcome == "asthma_n" | outcome == "copd_n" | outcome == "pneum_n")
+# create order
+levels <- c(rep(5,8), rep(2,8), rep(3,8), rep(4,8), rep(1,8))
+name <- c(rep("Acute Bronchitis",8), rep("Asthma",8), rep("COPD",8), 
+          rep("Pneumonia",8), rep("All Respiratory", 8))
+
+resp_lag_df$levels <- levels
+resp_lag_df$name <- name
+# preserve order
+resp_lag_df <- resp_lag_df %>% 
+  arrange(levels, lag) 
+
+resp_lag_df$name <- factor(resp_lag_df$name, 
+                    levels = unique(resp_lag_df$name))
+
+  
+dl_plot <- ggplot(resp_lag_df, aes(x=lag, y=rel_risk)) +
+  geom_line(colour = "darkblue") +
+  geom_ribbon(aes(ymin = lower_95, ymax = upper_95), fill = "darkblue", alpha = 0.3) + 
+  scale_y_continuous(limits = c(0.9, 1.15)) +
+  scale_x_continuous(breaks = c(seq(0, 7,by=1))) +
+  geom_hline(yintercept = 1, linetype = 2, colour = "red") +
+  facet_wrap(~name, scales = "free_x") +
+  ylab(expression("Relative Risk for a 10 ug/m^3 increase smoke PM"[2.5])) +
+  xlab("Lagged Days") +
+  theme(panel.background = element_rect(fill = 'white', colour = 'black'),
+    strip.text = element_text(size = 13),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    strip.background = element_rect(colour=NA, fill=NA))
+
+dl_plot
+```
+
+CVD outcomes cumulative effect.
+
+```{r cumulative effects results cvd}
+# print table of cumulative effects
+knitr::kable(cumulative_df, 
+caption = paste0("Cumulative Effect for a 10 ug/m^3 increase in GWR smoke ",
+  "lagged days 0-7 mixed model approach"))
+
+cvd_results <- cumulative_df %>% 
+  filter(outcome == "cvd_n" | outcome == "arrythmia_n" | outcome == "mi_n" |
+    outcome == "cereb_vas_n" | outcome == "hf_n" | outcome == "ihd_n" ) %>% 
+  mutate(levels = c(2,3,1,4,5,6),
+    name = c('Arrhythmia','Cerebrovascular Disease', 'Cardiovascular Disease', 
+      'Heart Failure', 'Ischemic Heart Disease','Myocardial Infarction')) %>% 
+  arrange(levels) %>% 
+  mutate(name = factor(name, name))
+
+
+# plot
+cvd_plot <- ggplot(cvd_results, aes(x=name, y = rel_risk)) +
+  geom_point(colour = "darkblue") +
+  geom_text(aes(label = round(rel_risk,2)), hjust = -0.25) +
+  geom_errorbar(aes(ymin=lower_95, ymax=upper_95), colour= "darkblue", width = 0.2) +
+  geom_hline(yintercept = 1, linetype = 2, colour = "red") +
+  theme(
+   panel.background = element_rect(fill = 'white', colour = 'black'),
+   panel.grid.major = element_blank(),
+   panel.grid.minor = element_blank()) +
+  ylab(expression("Cumulative relative risk for a 10 ug/m^3 increase smoke PM"[2.5])) +
+  xlab("Cardiovascular Outcome") 
+
+cvd_plot
+```
+
+
+```{r cvd lag results}
+cvd_lag_df <- dist_lag_df %>% 
+  filter(outcome == "cvd_n" | outcome == "arrythmia_n" | outcome == "mi_n" |
+    outcome == "cereb_vas_n" | outcome == "hf_n" | outcome == "ihd_n" )
+
+# create order
+levels <- c(rep(2,8), rep(3,8), rep(1,8), rep(4,8), rep(5,8), rep(6,8))
+name <- c(rep("Arrhythmia",8), rep("Cerebrovascular Disease",8), 
+          rep("Cardiovascular Disease",8),rep("Heart Failure",8),
+          rep("Ischemic Heart Disease",8), rep("Myocardial Infarction", 8))
+
+cvd_lag_df$levels <- levels
+cvd_lag_df$name <- name
+# preserve order
+cvd_lag_df <- cvd_lag_df %>% 
+  arrange(levels, lag) 
+
+cvd_lag_df$name <- factor(cvd_lag_df$name, 
+                    levels = unique(cvd_lag_df$name))
+
+  
+dl_plot <- ggplot(cvd_lag_df, aes(x=lag, y=rel_risk)) +
+  geom_line(colour = "darkblue") +
+  geom_ribbon(aes(ymin = lower_95, ymax = upper_95), fill = "darkblue", alpha = 0.3) + 
+  scale_y_continuous(limits = c(0.9, 1.15)) +
+  scale_x_continuous(breaks = c(seq(0, 7,by=1))) +
+  geom_hline(yintercept = 1, linetype = 2, colour = "red") +
+  facet_wrap(~name, scales = "free_x") +
+  ylab(expression("Relative Risk for a 10 ug/m^3 increase smoke PM"[2.5])) +
+  xlab("Lagged Days") +
+  theme(panel.background = element_rect(fill = 'white', colour = 'black'),
+    strip.text = element_text(size = 10),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    strip.background = element_rect(colour=NA, fill=NA))
+
+dl_plot
+
+```
+
+
 Some results are similar to the two-stage approach. Ander suggests only interpreting lagged days if the cumulative effect is meaningful. Only asthma and all respiratory have significant cumulative effects. I think I might leave out broken arm for presentations to avoid confusion as there may be a protective effect 5 to 6 days after smoke exposure, which may make sense biologically if people do not go outside. There may be more meaningful associations the more states/years we include.
+
+## ISEE results
+
+Smoke days > 10 ug/m^3 map for Oregon and Washington for ISEE presentation.
+
+```{r isee map,  message = F, warning = F, echo = F, results = "asis"}
+# bind oregon and washington polygon data
+isee_map_df <- wa_smk_df %>% 
+  bind_rows(or_smk_df) %>% 
+  filter(smk_cut_method == "Smoke PM2.5 > 10 ug/m^3") %>% 
+  mutate(label = ifelse(region == "oregon", 
+    "Oregon: May 1st to September 30th 2013", 
+    "Washington: June 1st to October 31st 2012"))
+
+# smoke days in OR and WA where smoke is > 10 units
+smoke_map <- ggplot(isee_map_df, aes(x=long, y=lat, group=group)) +
+  # fill with number of smoke days
+  geom_polygon(aes(fill = smoke_days), alpha = 0.8) +
+  scale_fill_gradient(expression("Number of Smoke Days > 10 µg/m"^3),
+    low = "#0b486b", high = "#f56217",
+    guide = guide_colourbar(direction = "horizontal",
+      title.position = "top", title.hjust = 0.5, barwidth = 20)) +
+  # add county path on top
+  geom_path() +
+  facet_wrap(~label, scales = "free") +
+  xlab("Longitude") +
+  ylab("Latitude") +
+  theme(panel.background = element_rect(fill = 'white', colour = 'black'),
+    strip.text = element_text(size = 13),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    strip.background = element_rect(colour=NA, fill=NA),
+    legend.position = "bottom")
+
+smoke_map
+# save map for ISEE presentation
+# save 6 inch by 4 inch
+ggsave("./isee_smoke_map.pdf", plot = smoke_map, 
+       width = 12, height = 6, units = "in")
+```
+
+GWR time series for Oregon.
+
+```{r oregon ts smoke, message = F, warning = F, echo = F, results = "asis"}
+
+# small multiples dataset
+or_smk <- or_ts %>% 
+  select(county, date, geo_smk_pm) %>% 
+  gather(key = smk_method, value = pm, -date, -county)
+  
+or_smk_plot <- ggplot(or_smk, aes(x = date, y = pm)) +
+  geom_point(color = "red", size=0.5) +
+  scale_x_date(date_labels = "%m") +
+  facet_wrap(~county) +
+  ylab(expression("Smoke PM2.5 µg/m"^3)) +
+  xlab("Month in 2013") +
+  theme(panel.background = element_rect(fill = 'white', colour = 'black'),
+    strip.text = element_text(size = 8),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    strip.background = element_rect(colour=NA, fill=NA),
+    legend.position = "bottom")
+
+or_smk_plot
+```
+
+```{r wash ts smoke, message = F, warning = F, echo = F, results = "asis"}
+
+# small multiples dataset
+wa_smk <- wa_ts %>% 
+  select(county, date, geo_smk_pm) %>% 
+  gather(key = smk_method, value = pm, -date, -county) 
+
+# test <- wa_smk_df %>% filter(smk_cut_method == "Smoke Wave") %>% 
+#   group_by(subregion) %>% 
+#   summarise(lat = min(lat), long = max(long)) %>% 
+#   arrange(desc(lat), long) 
+# 
+# test$subregion
+
+wa_smk_plot <- ggplot(wa_smk, aes(x = date, y = pm)) +
+  geom_point(color = "blue", size=0.5) +
+  scale_x_date(date_labels = "%m") +
+  facet_wrap(~county) +
+  ylab(expression("Smoke PM2.5 µg/m"^3)) +
+  xlab("Month in 2012") +
+  theme(panel.background = element_rect(fill = 'white', colour = 'black'),
+    strip.text = element_text(size = 8),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    strip.background = element_rect(colour=NA, fill=NA),
+    legend.position = "bottom")
+
+wa_smk_plot
+```
+
+Total counts of outcomes by state.
+
+```{r outcome counts by state}
+counts <- meta_ts %>% 
+  group_by(state) %>% 
+  summarise_at(vars(n_obs:mi_n), sum) %>% 
+  t() 
+
+colnames(counts) <- c("oregon", "washington")
+
+knitr::kable(counts)
+```
