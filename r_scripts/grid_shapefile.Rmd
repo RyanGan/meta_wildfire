@@ -1,0 +1,123 @@
+---
+title: "WRF-Grid Shapefile"
+author: "Ryan Gan"
+date: "2018-01-10"
+output: html_document
+---
+
+## Purpose
+
+The purpose of this script is to create a shapefile of the WRF-grid from a netcdf file to use in population-weighting calculations.
+
+```{r setup}
+library(tidyverse)
+library(ncdf4)
+library(raster)
+library(sf)
+
+# knitr options
+knitr::opts_chunk$set(fig.width=7, fig.height=5,
+                      warning=FALSE, message=FALSE)
+```
+
+## NetCDF file
+
+Open connection to netcdf file, GWRdata4health_West2015, provided by Kate and Bonne using the netcdf4 package.
+
+```{r nc_connection}
+# define path to .nc file
+nc_path <- paste0("../data/smoke/GWRdata4health_West2015.nc")
+# open connection to .nc file
+gwr_nc <- nc_open(nc_path)
+# print summary of gwr nc file
+gwr_nc
+```
+
+## Plot of WRF grid centroids
+
+Extract latitude and longitude values and plot the center point of each cell.
+
+```{r lat_lon_summary}
+# extract lat values
+lat <- ncvar_get(nc=gwr_nc, varid="glats")
+# extract lon values
+lon <- ncvar_get(nc=gwr_nc, varid="glons")
+
+# turn lat/lon matrices in to flat file
+latlon_locations <- as_data_frame(cbind(as.vector(lon), as.vector(lat))) %>% 
+  rename(lon = V1, lat = V2)
+
+summary(latlon_locations)
+
+# plot centroids
+ggplot(data=latlon_locations, aes(x=lon, y=lat)) +
+  geom_point(size=0.5) +
+  theme_minimal()
+```
+
+The plot shows that the points are not evenly spaced in a rectangular grid. This explains the problem we had when trying and read it in using the raster package. I think assigning a projection like WGS84 or NAD83 will fix this.
+
+## Create a WRF raster (grid) based on irregular points
+
+Converting irregular latitude and longitude points to a raster.
+
+```{r create_raster}
+# point locations
+latlon <- cbind(as.vector(lon), as.vector(lat))
+# create an extent object
+e <- extent(latlon)
+e
+
+# find the dims of lat/lon matrix
+dim(lon)
+dim(lat)
+r <- raster(e, nrow=138, ncol = 151)
+
+# rasterize
+wrfgrid <- rasterize(latlon, r)
+# summary of wrfgrid raster
+wrfgrid
+```
+
+## Create WRF polygon/shapefile
+
+Creating a polygon object from the irregular raster.
+
+```{r create_poly}
+# creating polygon
+wrf_poly <- rasterToPolygons(wrfgrid)
+plot(wrf_poly)
+```
+
+## Convert polygon to simple features
+
+Converting WRF polygon to simplefeatures object and plotting over US county polygon. I like working with simple features better.
+
+```{r creat_sf}
+# read county shapefile
+us_state <- read_sf("../data/shapefile/us_state")
+# extract proj4string from us county
+nad83 <- st_crs(us_state)
+# summary of us_state
+# filter out states and territories outside of hte US
+us_state <- us_state %>% 
+  filter(!(NAME %in% c("Alaska", "Hawaii", "Puerto Rico")))
+         
+# converting polygon to sf object
+wrf_sf <- st_as_sf(wrf_poly)
+# assign wgs84 projection
+st_crs(wrf_sf) <- nad83
+
+head(wrf_sf)
+
+# plot sf object overlayed on county
+ggplot(us_state) + 
+  geom_sf() +
+  geom_sf(data=wrf_sf, aes(), alpha = 0.0) +
+  theme_minimal()
+```
+
+Polygon of WRFGRID is also irregular. Plotted it over a shapefile of counties in the US. I'm not sure if it's right, but there are some holes in the northern part of the grid where no polygons for the WRFGRID exists. 
+
+I'm going to need to check with Kate and Bonne if this looks right.
+
