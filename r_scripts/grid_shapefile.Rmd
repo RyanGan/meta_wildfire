@@ -112,12 +112,51 @@ head(wrf_sf)
 
 # plot sf object overlayed on county
 ggplot(us_state) + 
-  geom_sf() +
+  geom_sf(color = "red") +
   geom_sf(data=wrf_sf, aes(), alpha = 0.0) +
   theme_minimal()
 ```
 
 Polygon of WRFGRID is also irregular. Plotted it over a shapefile of counties in the US. I'm not sure if it's right, but there are some holes in the northern part of the grid where no polygons for the WRFGRID exists. 
 
-I'm going to need to check with Kate and Bonne if this looks right.
+The overall projection matches Bonne's and Kate's, but I'm going to check for potential gaps at the top.
 
+### Plot of Montana subset
+
+Subsetting grid to Montana.
+
+```{r montana_check}
+# subset montana state
+montana_sf <- us_state %>% 
+  filter(NAME == "Montana")
+
+# subset grid to montana
+montana_grid <- wrf_sf[montana_sf,]
+
+# plot sf object overlayed on county
+ggplot(montana_sf) + 
+  geom_sf(alpha = 0.5, color = "red") +
+  geom_sf(data=montana_grid, aes(), alpha = 0.0) +
+  theme_minimal()
+```
+
+There does appear to be some gaps in the shapefile in Montana, but this might not be a huge issue since we have no health data from Montana. I will check Washington since we do have 2015 health data from there.
+
+## Plot of Washington subset
+
+```{r washington_check}
+# subset montana state
+washington_sf <- us_state %>% 
+  filter(NAME == "Washington")
+
+# subset grid to montana
+washington_grid <- wrf_sf[washington_sf,]
+
+# plot sf object overlayed on county
+ggplot(washington_sf) + 
+  geom_sf(alpha = 0.5, color = "red") +
+  geom_sf(data=washington_grid, aes(), alpha = 0.0) +
+  theme_minimal()
+```
+
+This may be okay. I do have some potential gaps in the shapefile though. Usually along the edge. I could figure this out and fix it, but that will take some time. I'll use Bonne's shapefile grid since it does not have gaps.
