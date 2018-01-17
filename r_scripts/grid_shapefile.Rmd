@@ -26,7 +26,7 @@ Open connection to netcdf file, GWRdata4health_West2015, provided by Kate and Bo
 
 ```{r nc_connection}
 # define path to .nc file
-nc_path <- paste0("../data/smoke/GWRdata4health_West2015.nc")
+nc_path <- paste0("./data/smoke/2015-smoke_pm_wus.nc")
 # open connection to .nc file
 gwr_nc <- nc_open(nc_path)
 # print summary of gwr nc file
@@ -95,7 +95,7 @@ Converting WRF polygon to simplefeatures object and plotting over US county poly
 
 ```{r creat_sf}
 # read county shapefile
-us_state <- read_sf("../data/shapefile/us_state")
+us_state <- read_sf("./data/shapefile/us_state")
 # extract proj4string from us county
 nad83 <- st_crs(us_state)
 # summary of us_state
