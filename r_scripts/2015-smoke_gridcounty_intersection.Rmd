@@ -1,0 +1,25 @@
+---
+title: "Intersection of Grid and County Shapefiles"
+author: "Ryan Gan"
+date: "1/17/2018"
+output: html_document
+---
+
+
+## Purpose
+
+This markdown script calculates the proportion of intersection between the 2015 grid shapefile and county shapefile.
+
+### Setup
+
+Loading tidyverse for general data wrangling and plotting and sf package for spatial calculations.
+
+```{r setup, include=F}
+# libraries used
+library(tidyverse)
+library(sf)
+
+# general knitr options
+knitr::opts_chunk$set(fig.width = 7, fig.height = 5, 
+                      message = F, warning = F)
+```

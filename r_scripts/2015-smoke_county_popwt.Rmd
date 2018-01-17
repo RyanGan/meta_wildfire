@@ -1,13 +1,13 @@
 ---
 title: "Western US County Population-Weighting PM"
 author: "Ryan Gan"
-date: "1/17/2018"
+date: "2018-01-17"
 output: html_document
 ---
 
 ## Purpose
 
-This document contains descriptions and code for estimating daily county-level population-weighted PM ~2.5~ values from gridded estimates of PM ~2.5~. Gridded estimates were calculated using geographically-weighted ridge regression (GWR) and krigging.
+This markdown file contains descriptions and code for estimating daily county-level population-weighted PM ~2.5~ values from gridded estimates of PM ~2.5~. Gridded estimates were calculated using geographically-weighted ridge regression (GWR) and krigging.
 
 ### Setup
 
