@@ -13,4 +13,5 @@ Uses the state health outcomes and smoke data from Colorado, Oregon, and Washing
 - Population-weight county-level estimates of PM2.5
 - Add 2015 Washington and 2015 Colorado, time series data to Washington 2012 and Oregon 2013 data.
 - Pilot 2015 Colorado Mortality analysis for Rish.
+- Rename files and organize repo.
 
