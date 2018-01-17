@@ -78,6 +78,8 @@ r <- raster(e, nrow=138, ncol = 151, crs = wgs84_11)
 wrfgrid <- rasterize(latlon, r)
 # summary of wrfgrid raster
 wrfgrid
+# assign id
+wrfgrid$id <- seq(1:20838)
 ```
 
 ## Create WRF polygon/shapefile
@@ -94,10 +96,11 @@ plot(wrf_poly)
 
 # convert to sf object
 grid_sf <- st_as_sf(wrf_poly)
+grid_sf
 # write polygon
 write_path <- paste0("./data/shapefile/smoke_grid/2015-smoke_ryan_grid.shp")
 
-st_write(grid_sf, write_path)
+st_write(grid_sf, write_path, delete_layer = T)
 ```
 
 ## Convert polygon to simple features

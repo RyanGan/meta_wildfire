@@ -1,7 +1,7 @@
 ---
 title: "Intersection of Grid and County Shapefiles"
 author: "Ryan Gan"
-date: "1/17/2018"
+date: "2018-01-17"
 output: html_document
 ---
 
@@ -10,7 +10,7 @@ output: html_document
 
 This markdown script calculates the proportion of intersection between the 2015 grid shapefile and county shapefile.
 
-### Setup
+## Setup
 
 Loading tidyverse for general data wrangling and plotting and sf package for spatial calculations.
 
@@ -23,3 +23,58 @@ library(sf)
 knitr::opts_chunk$set(fig.width = 7, fig.height = 5, 
                       message = F, warning = F)
 ```
+
+### Read Shapefiles
+
+Reading in the grid and county shapefiles as simple features. 
+
+#### Note 2018-01-17:
+Reading in my shapefile that has some holes; will replace with Bonne's shapefile once I get one that is not corrupted.
+
+Also consider county boundaries. I'm sure they don't change much, but may not hurt to use 2015 shapefiles.
+
+```{r read_sf}
+# grid path
+grid_path <- paste0("./data/shapefile/smoke_grid")
+# read grid sf
+grid_sf <- st_read(dsn = grid_path, layer = "2015-smoke_ryan_grid") %>% 
+  select(-layer)
+
+# county path
+county_path <- paste0("./data/shapefile/us_county")
+# read county sf
+county_sf <- st_read(dsn = county_path, layer = "us_county")
+```
+
+Plotting overlay of grid on the US county shapefile.
+
+```{r us_plot}
+plot <- ggplot(county_sf) + 
+  geom_sf(color = "red") +
+  geom_sf(data=grid_sf, aes(), alpha = 0.0) +
+  theme_minimal()
+
+plot
+```
+
+Subset US county shapefile to only Western US counties and plot it to make sure it looks right.
+
+```{r western_subset}
+# STATE FIPS I want to subset
+western_state_fp <- c("04","06","08","16","53","41","32","49","56", "35", "30")
+
+# subset simple features
+western_county_sf <- county_sf %>% 
+  filter(STATEFP %in% western_state_fp)
+
+# plot
+plot <- ggplot(western_county_sf) +
+  geom_sf(color = "red") +
+  geom_sf(data=grid_sf, aes(), alpha = 0.0) +
+  theme_minimal()
+
+plot
+# this projection is off; need a new shapefile from bonne
+```
+
+I want to calculate proportion intersection for each county in these states.
