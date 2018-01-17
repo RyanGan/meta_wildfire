@@ -68,10 +68,11 @@ latlon <- cbind(as.vector(lon), as.vector(lat))
 e <- extent(latlon)
 e
 
-# find the dims of lat/lon matrix
-dim(lon)
-dim(lat)
-r <- raster(e, nrow=138, ncol = 151)
+# set projeciton
+wgs84_11 <- "+proj=longlat +datum=WGS84"
+
+# rasterize
+r <- raster(e, nrow=138, ncol = 151, crs = wgs84_11)
 
 # rasterize
 wrfgrid <- rasterize(latlon, r)
@@ -81,12 +82,22 @@ wrfgrid
 
 ## Create WRF polygon/shapefile
 
-Creating a polygon object from the irregular raster.
+Creating a polygon object from the irregular raster. 
+
+### Note 2018-01-17: 
+Saving for now even though grid polygon has some holes. Figuring out code on intersection while I wait for Bonne to send a grid shapefile I can open.
 
 ```{r create_poly}
 # creating polygon
 wrf_poly <- rasterToPolygons(wrfgrid)
 plot(wrf_poly)
+
+# convert to sf object
+grid_sf <- st_as_sf(wrf_poly)
+# write polygon
+write_path <- paste0("./data/shapefile/smoke_grid/2015-smoke_ryan_grid.shp")
+
+st_write(grid_sf, write_path)
 ```
 
 ## Convert polygon to simple features
@@ -107,8 +118,6 @@ us_state <- us_state %>%
 wrf_sf <- st_as_sf(wrf_poly)
 # assign wgs84 projection
 st_crs(wrf_sf) <- nad83
-
-head(wrf_sf)
 
 # plot sf object overlayed on county
 ggplot(us_state) + 
