@@ -4,7 +4,7 @@ author: "Ryan Gan"
 date: "10/17/2017"
 output: html_document
 ---
-## Document Purpose
+## Purpose
 
 The point of this document is to check and verify that the PM~2.5~ smoke data that will be used in the multi-state time-series study.
 

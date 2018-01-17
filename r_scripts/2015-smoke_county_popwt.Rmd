@@ -5,32 +5,46 @@ date: "1/17/2018"
 output: html_document
 ---
 
+## Purpose
+
+This document contains descriptions and code for estimating daily county-level population-weighted PM ~2.5~ values from gridded estimates of PM ~2.5~. Gridded estimates were calculated using geographically-weighted ridge regression (GWR) and krigging.
+
+### Setup
+
+Loading tidyverse for general data wrangling and plotting; netcdf4 for accessing PM data stored in .nc file; sf package for spatial calculations.
+
 ```{r setup, include=F}
 # libraries used
 library(tidyverse)
 library(ncdf4)
 
-# kniter options
+# general knitr options
 knitr::opts_chunk$set(fig.width = 7, fig.height = 5, 
                       message = F, warning = F)
 ```
 
-## R Markdown
+## Extracting PM values from netcdf files
 
-This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+Connecting to PM netcdf file and printing summary. NetCDF file is a 3-dimentional grid of latitude, longitude, and time. It also contains values for GWR, kriging, and background estimates of PM (estimated via GWR).
 
-When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
-
-```{r cars}
-summary(cars)
+```{r connect_nc}
+# open connection to netcdf 
+smk_2015_nc <- nc_open("./data/smoke/2015-smoke_pm_wus.nc")
+# print summary
+smk_2015_nc
 ```
 
-## Including Plots
+Extracting grid points (matrix) and setting as vectors. When using the as.vector function on matrix values from a netcdf, it will go row by row (left to right, then top to bottom). Plotting the latitude and longitude coordinates to check centroids of grid.
 
-You can also embed plots, for example:
+```{r assemble_grid}
+# extract longitude as a vector
+lon <- as.vector(ncvar_get(smk_2015_nc, "glons"))
+# extract latitude as a vector
+lat <- as.vector(ncvar_get(smk_2015_nc, "glats"))
+# extract date as a vector (format yyyymmdd)
+date <- as.vector(ncvar_get(smk_2015_nc, "dates"))
 
-```{r pressure, echo=FALSE}
-plot(pressure)
+
 ```
 
-Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+
