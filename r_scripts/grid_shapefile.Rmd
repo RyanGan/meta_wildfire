@@ -13,6 +13,8 @@ The purpose of this script is to create a shapefile of the WRF-grid from a netcd
 library(tidyverse)
 library(ncdf4)
 library(raster)
+library(rgdal)
+library(sp)
 library(sf)
 
 # knitr options
@@ -53,6 +55,26 @@ summary(latlon_locations)
 ggplot(data=latlon_locations, aes(x=lon, y=lat)) +
   geom_point(size=0.5) +
   theme_minimal()
+
+# trying to redefine projection of coordinates
+# transform to spatial points
+coordinates(latlon_locations) <- c("lon", "lat")
+# change coordinate reference system
+proj4string(latlon_locations) <- CRS("+proj=longlat +datum=WGS84")
+# assign wgs projection
+wgs84 <- "+proj=longlat +datum=WGS84 +ellps=WGS84 +towgs84=0,0,0"
+# project coordinates
+grid_coords <- spTransform(latlon_locations, wgs84)
+
+
+wgs_test <- "+proj=utm +zone=11 +ellps=WGS84 +datum=WGS84 +units=m +no_defs"
+
+grid_coords2 <- spTransform(latlon_locations, wgs_test)
+
+summary(grid_coords)
+summary(grid_coords2)
+plot(grid_coords2)
+
 ```
 
 The plot shows that the points are not evenly spaced in a rectangular grid. This explains the problem we had when trying and read it in using the raster package. I think assigning a projection like WGS84 or NAD83 will fix this.
@@ -67,19 +89,19 @@ latlon <- cbind(as.vector(lon), as.vector(lat))
 # create an extent object
 e <- extent(latlon)
 e
-
+extent(grid_coords2)
+extent(grid_coords)
 # set projeciton
-wgs84_11 <- "+proj=longlat +datum=WGS84"
+wgs84_11 <- paste0("+proj=longlat +zone=11 +ellps=WGS84 +datum=WGS84",
+                   "+towgs84=0,0,0")
 
 # rasterize
-r <- raster(e, nrow=138, ncol = 151, crs = wgs84_11)
+r <- raster(e, nrow = 138, ncol = 151, crs = wgs84_11)
 
 # rasterize
 wrfgrid <- rasterize(latlon, r)
 # summary of wrfgrid raster
 wrfgrid
-# assign id
-wrfgrid$id <- seq(1:20838)
 ```
 
 ## Create WRF polygon/shapefile
@@ -110,6 +132,7 @@ Converting WRF polygon to simplefeatures object and plotting over US county poly
 ```{r creat_sf}
 # read county shapefile
 us_state <- read_sf("./data/shapefile/us_state")
+us_state
 # extract proj4string from us county
 nad83 <- st_crs(us_state)
 # summary of us_state
@@ -119,13 +142,13 @@ us_state <- us_state %>%
          
 # converting polygon to sf object
 wrf_sf <- st_as_sf(wrf_poly)
-# assign wgs84 projection
-st_crs(wrf_sf) <- nad83
+# st_transform
+wrf_nad83_sf <- st_transform(wrf_sf, crs = nad83)
 
 # plot sf object overlayed on county
 ggplot(us_state) + 
   geom_sf(color = "red") +
-  geom_sf(data=wrf_sf, aes(), alpha = 0.0) +
+  geom_sf(data=grid_sf, aes(), alpha = 0.0) +
   theme_minimal()
 ```
 
@@ -172,3 +195,4 @@ ggplot(washington_sf) +
 ```
 
 This may be okay. I do have some potential gaps in the shapefile though. Usually along the edge. I could figure this out and fix it, but that will take some time. I'll use Bonne's shapefile grid since it does not have gaps.
+
