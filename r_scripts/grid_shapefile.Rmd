@@ -41,7 +41,7 @@ Extract latitude and longitude values and plot the center point of each cell.
 
 ```{r lat_lon_summary}
 # extract lat values
-lat <- ncvar_get(nc=gwr_nc, varid="glats")
+lat <- ncvar_get(nc=gwr_nc, varid="glats") 
 # extract lon values
 lon <- ncvar_get(nc=gwr_nc, varid="glons")
 
@@ -89,8 +89,7 @@ latlon <- cbind(as.vector(lon), as.vector(lat))
 # create an extent object
 e <- extent(latlon)
 e
-extent(grid_coords2)
-extent(grid_coords)
+
 # set projeciton
 wgs84_11 <- paste0("+proj=longlat +zone=11 +ellps=WGS84 +datum=WGS84",
                    "+towgs84=0,0,0")
@@ -102,6 +101,7 @@ r <- raster(e, nrow = 138, ncol = 151, crs = wgs84_11)
 wrfgrid <- rasterize(latlon, r)
 # summary of wrfgrid raster
 wrfgrid
+
 ```
 
 ## Create WRF polygon/shapefile
@@ -145,10 +145,14 @@ wrf_sf <- st_as_sf(wrf_poly)
 # st_transform
 wrf_nad83_sf <- st_transform(wrf_sf, crs = nad83)
 
+# lat lon df
+latlon_df <- as_data_frame(cbind(as.vector(lon), as.vector(lat))) %>% 
+  rename(lon = V1, lat = V2)
+
 # plot sf object overlayed on county
 ggplot(us_state) + 
   geom_sf(color = "red") +
-  geom_sf(data=grid_sf, aes(), alpha = 0.0) +
+  geom_point(data=latlon_df, aes(x=lon, y=lat), size = 0.1, color = "blue") +
   theme_minimal()
 ```
 
