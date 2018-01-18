@@ -28,17 +28,15 @@ knitr::opts_chunk$set(fig.width = 7, fig.height = 5,
 
 Reading in the grid and county shapefiles as simple features. 
 
-#### Note 2018-01-17:
-Reading in my shapefile that has some holes; will replace with Bonne's shapefile once I get one that is not corrupted.
-
 Also consider county boundaries. I'm sure they don't change much, but may not hurt to use 2015 shapefiles.
 
 ```{r read_sf}
 # grid path
 grid_path <- paste0("./data/shapefile/smoke_grid")
 # read grid sf
-grid_sf <- st_read(dsn = grid_path, layer = "2015-smoke_ryan_grid") %>% 
-  select(-layer)
+grid_sf <- st_read(dsn = grid_path, layer = "wus_grid2015-ko") 
+
+plot(grid_sf)
 
 # county path
 county_path <- paste0("./data/shapefile/us_county")
