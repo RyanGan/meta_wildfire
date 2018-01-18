@@ -5,10 +5,9 @@ date: "2018-01-17"
 output: html_document
 ---
 
-
 ## Purpose
 
-This markdown script calculates the proportion of intersection between the 2015 grid shapefile and county shapefile.
+This markdown script calculates the proportion of intersection between the 2015 grid shape file and county shape file.
 
 ## Setup
 
@@ -24,38 +23,33 @@ knitr::opts_chunk$set(fig.width = 7, fig.height = 5,
                       message = F, warning = F)
 ```
 
-### Read Shapefiles
+## Shapefiles
 
-Reading in the grid and county shapefiles as simple features. 
+Reading in the grid and county shape files as simple features. 
 
-Also consider county boundaries. I'm sure they don't change much, but may not hurt to use 2015 shapefiles.
+Also consider county boundaries. I'm sure they don't change much, but may not hurt to use 2015 shape files.
 
 ```{r read_sf}
 # grid path
-grid_path <- paste0("./data/shapefile/smoke_grid")
+grid_path <- paste0("../data/shapefile/smoke_grid")
 # read grid sf
 grid_sf <- st_read(dsn = grid_path, layer = "wus_grid2015-ko") 
 
-plot(grid_sf)
-
 # county path
-county_path <- paste0("./data/shapefile/us_county")
+county_path <- paste0("../data/shapefile/us_county")
 # read county sf
 county_sf <- st_read(dsn = county_path, layer = "us_county")
+
+# assign crs of county_sf to grid_sf
+wgs84 <- st_crs(county_sf)
+# assign crs
+st_crs(grid_sf) <- wgs84
+
 ```
 
-Plotting overlay of grid on the US county shapefile.
+### Plotting overlay of grid and county shapefiles
 
-```{r us_plot}
-plot <- ggplot(county_sf) + 
-  geom_sf(color = "red") +
-  geom_sf(data=grid_sf, aes(), alpha = 0.0) +
-  theme_minimal()
-
-plot
-```
-
-Subset US county shapefile to only Western US counties and plot it to make sure it looks right.
+Subset US county shape file to only Western US counties and plot it to make sure it looks right.
 
 ```{r western_subset}
 # STATE FIPS I want to subset
@@ -63,7 +57,8 @@ western_state_fp <- c("04","06","08","16","53","41","32","49","56", "35", "30")
 
 # subset simple features
 western_county_sf <- county_sf %>% 
-  filter(STATEFP %in% western_state_fp)
+  filter(STATEFP %in% western_state_fp) %>% 
+  mutate(FIPS = paste0(STATEFP, COUNTYFP))
 
 # plot
 plot <- ggplot(western_county_sf) +
@@ -72,7 +67,187 @@ plot <- ggplot(western_county_sf) +
   theme_minimal()
 
 plot
-# this projection is off; need a new shapefile from bonne
 ```
 
-I want to calculate proportion intersection for each county in these states.
+## Reassigning grid ID
+
+Checking how WRFGRID ID is labeled. It looks like this starts in the bottom left hand corner, goes bottom to top, then left to right. This is the opposite of how a vector is extracted from a matrix, which starts in the top right corner, and goes left to right, top to bottom.
+
+```{r wrfgrid_label}
+# subset to first 10 WRFGRID IDs
+grid_subset <- grid_sf %>% 
+  slice(c(1:10, 152:162))
+# name of grid
+# make a dataframe with rounded proportion values
+grid_names <- grid_subset %>% 
+  group_by(WRFGRID_ID) %>% 
+  mutate(lon = unlist(st_centroid(geometry))[1],
+         lat = unlist(st_centroid(geometry))[2]) %>% 
+  ungroup() %>% 
+  select(WRFGRID_ID, lon, lat)
+# convert simple featrues to dataframe
+st_geometry(grid_names) <- NULL
+
+# plot
+plot <- ggplot(grid_subset) +
+  geom_sf() +
+  geom_text(data=grid_names, aes(x=lon, y=lat,label= WRFGRID_ID)) +
+  theme_minimal()
+
+plot
+```
+
+I'm going to try and apply a new label by sorting by latitude the longitude and giving it a new label. To do this, I've created a matrix that is the same dimension as the WRFGRID (151 rows by 138 columns) that sequentially numbers 1:20838 starting in the bottom left corner, and going from bottom to top, left to right. I've then created a second matrix that sequentially numbers 1:20838, starting at the top left corner, and goes left to right, top to bottom. This is the way data is extracted from the matrices in the netcdf files.
+
+```{r grid_new_label}
+# create matrix that labels the cell in the same way shapefile lists gridid
+mat <- apply(matrix(1:20838, nrow=151, ncol=138), 2, rev)
+# create second matrix that list matrix upper right, left to right 
+mat2 <- t(matrix(1:20838, nrow=138, ncol=151))
+
+# create id key
+id_key <- as_data_frame(cbind(as.vector(mat), as.vector(mat2))) %>% 
+  rename(WRFGRID_ID = V1, id = V2) %>% 
+  arrange(WRFGRID_ID)
+
+# add id to grid_sf
+grid_id_sf <- grid_sf %>% 
+  left_join(id_key, by = "WRFGRID_ID") %>% 
+  arrange(id)
+# assign wgs84 crs
+st_crs(grid_id_sf) <- wgs84
+```
+
+### Plot to check new IDs
+
+Plotting by new grid id to make sure it's listed in the correct order for joining to values from netcdf file. I've labeled each grid starting with the original WRFGRID_ID and the new id i created (WRFGRID_ID, id).
+
+```{r plot_new_id}
+# new subset
+grid_subset <- grid_id_sf %>% 
+  slice(1:10)
+# get cell names
+grid_names <- grid_subset %>% 
+  group_by(WRFGRID_ID) %>% 
+  mutate(lon = unlist(st_centroid(geometry))[1],
+         lat = unlist(st_centroid(geometry))[2]) %>% 
+  ungroup() %>% 
+  select(WRFGRID_ID, id, lon, lat) %>% 
+  # joining both ids 
+  mutate(joint_id = paste(WRFGRID_ID, id, sep=","))
+# convert simple featrues to dataframe
+st_geometry(grid_names) <- NULL
+
+# plot
+plot <- ggplot(grid_subset) +
+  geom_sf() +
+  geom_text(data=grid_names, aes(x=lon, y=lat,label= joint_id)) +
+  theme_minimal()
+
+plot
+```
+
+Projection looks good. I want to calculate proportion intersection for each county in these states.
+
+## Calculation of proportion intersect
+
+Going to calculate in a for loop because I haven't figured out a good apply or purrr way to do this. The loop only takes about 2.6 minutes, which is not that much time.
+
+```{r propotion_intersect}
+# create empty dataframe
+prop_int_tibble <- grid_id_sf$id %>% 
+  tibble() %>% 
+  rename(grid_id = ".")
+
+# start compute time
+start_time <- Sys.time()
+
+for(i in 1:length(western_county_sf$FIPS)){
+  # subset county to find intersect
+  county <- slice(western_county_sf, i)
+  # extract fips number for variable name
+  fips_id <- paste0("fips_", county$FIPS)
+  # subset grid cells that touch any part of the county
+  grid <- grid_id_sf[county,]
+  # subset the intersected polygon
+  inter_poly <- st_intersection(grid, county) %>% 
+    # filter only to polygon or multipolygon type 
+    # to avoid errors with point or line types
+    filter(st_is(., c("POLYGON", "MULTIPOLYGON"))==T)
+  # filter grid ids to only grids in the inter_poly object
+  grid2 <- grid %>% filter(id %in% inter_poly$id) 
+  # find proportion intersect with original grid
+  prop_int <- as.numeric(st_area(inter_poly)/st_area(grid2))
+  # subset grid id
+  grid_id <- grid2$id
+  # make a tibble
+  county_grid_int <- tibble(grid_id, prop_int) %>% 
+    set_names(c("grid_id", fips_id))
+  # join with full tibble
+  prop_int_tibble <- prop_int_tibble %>% 
+    left_join(county_grid_int, by = "grid_id")
+} # end loop
+
+# compute time
+stop_time <- Sys.time()
+compute_time <- stop_time - start_time
+# run time
+compute_time
+```
+
+### Check of intersection in LA county
+
+Checking grid intersection calculations for a specific county to see if calculations look reasonable. I'll use Los Angles county since I've made these calculations before for the Bluesky grid.
+
+```{r la_county_check}
+# subset la county (FIPS 06037)
+la_county <- western_county_sf %>% 
+  filter(FIPS == "06037")
+
+# subset proportion intersect values for LA county
+la_prop_int <- prop_int_tibble %>% 
+  select(grid_id, fips_06037) %>% 
+  filter(!is.na(fips_06037))
+
+# subset la grid
+la_grid <- grid_id_sf %>% 
+  filter(id %in% la_prop_int$grid_id) %>% 
+  left_join(la_prop_int, by = c("id" = "grid_id")) %>% 
+  rename(prop_int = fips_06037)
+
+# make a dataframe with rounded proportion values
+grid_names <- la_grid %>% 
+  mutate(proportion = round(prop_int,2)) %>% 
+  group_by(id) %>% 
+  mutate(lon = unlist(st_centroid(geometry))[1],
+         lat = unlist(st_centroid(geometry))[2]) %>% 
+  ungroup() %>% 
+  select(id, lon, lat, proportion)
+# convert simple featrues to dataframe
+st_geometry(grid_names) <- NULL
+
+# plot grid overlayed on county
+plot <- ggplot(la_county) + 
+  geom_sf() +
+  geom_sf(data=la_grid, aes(fill=prop_int), alpha=0.7) +
+  geom_text(data=grid_names, aes(x=lon, y=lat, label=proportion), 
+            size = 2.5, angle=45) +
+  theme_bw()
+
+plot
+```
+
+Plot looks good of intersections look good. I'm going to do some final manipulations on the proportion intersect data frame and save a permanent file.
+
+### Writing proportion intersect file
+
+File will be used for calculations of county population-weighted PM.
+
+```{r save_file, eval=F}
+# replace NAs with 0s
+wus_prop_int <- prop_int_tibble %>% 
+  mutate_all(funs(replace(., is.na(.), 0)))
+
+# save file
+write_csv(wus_prop_int, paste0("./data/smoke/2015-smoke_propint_wus.csv"))
+```
