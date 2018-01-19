@@ -38,12 +38,35 @@ Extracting grid points (matrix) and setting as vectors. When using the as.vector
 
 ```{r assemble_grid}
 # extract longitude as a vector
-lon <- as.vector(ncvar_get(smk_2015_nc, "glons"))
+lon <- as.vector(t(ncvar_get(smk_2015_nc, "glons")))
 # extract latitude as a vector
-lat <- as.vector(ncvar_get(smk_2015_nc, "glats"))
+lat <- as.vector(t(ncvar_get(smk_2015_nc, "glats")))
 # extract date as a vector (format yyyymmdd)
 date <- as.vector(ncvar_get(smk_2015_nc, "dates"))
+# kriging values
+krig_pm <- ncvar_get(smk_2015_nc, "kPM")
 
+# id sequence
+id <- 1:20838
+
+# bind together and plot to see where grids are
+id_location <- as_data_frame(cbind(id, lon, lat))
+
+# first 100 values 
+id_first100 <- id_location[1:100,]
+
+ggplot(id_first100, aes(x=lon, y=lat)) +
+  geom_text(aes(label = id), size = 2.5) +
+  xlim(min(lon), max(lon)) +
+  ylim(min(lat), max(lat))
+
+# last 100
+id_last100 <- id_location[20738:20838,]
+
+ggplot(id_last100, aes(x=lon, y=lat)) +
+  geom_text(aes(label = id), size = 2.5) +
+  xlim(min(lon), max(lon)) +
+  ylim(min(lat), max(lat))
 
 ```
 
