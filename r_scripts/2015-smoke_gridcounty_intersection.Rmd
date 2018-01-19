@@ -44,16 +44,16 @@ county_sf <- st_read(dsn = county_path, layer = "us_county")
 wgs84 <- st_crs(county_sf)
 # assign crs
 st_crs(grid_sf) <- wgs84
-
 ```
 
 ### Plotting overlay of grid and county shapefiles
 
-Subset US county shape file to only Western US counties and plot it to make sure it looks right.
+Subset US county shape file to only Western US states and counties and plot it to make sure it looks right.
 
 ```{r western_subset}
 # STATE FIPS I want to subset
-western_state_fp <- c("04","06","08","16","53","41","32","49","56", "35", "30")
+western_state_fp <- c("04","06","08","16","53","41","32","49","56",
+                      "35", "30")
 
 # subset simple features
 western_county_sf <- county_sf %>% 
@@ -69,9 +69,9 @@ plot <- ggplot(western_county_sf) +
 plot
 ```
 
-## Reassigning grid ID
+## Grid ID
 
-Checking how WRFGRID ID is labeled. It looks like this starts in the bottom left hand corner, goes bottom to top, then left to right. This is the opposite of how a vector is extracted from a matrix, which starts in the top right corner, and goes left to right, top to bottom.
+Checking how WRFGRID ID is labeled. It looks like this starts in the bottom left hand corner, goes bottom to top, then left to right. This is not necissarily how values are extracted from the NetCDF file. I will need to be aware of this.
 
 ```{r wrfgrid_label}
 # subset to first 10 WRFGRID IDs
@@ -97,57 +97,7 @@ plot <- ggplot(grid_subset) +
 plot
 ```
 
-I'm going to try and apply a new label by sorting by latitude the longitude and giving it a new label. To do this, I've created a matrix that is the same dimension as the WRFGRID (151 rows by 138 columns) that sequentially numbers 1:20838 starting in the bottom left corner, and going from bottom to top, left to right. I've then created a second matrix that sequentially numbers 1:20838, starting at the top left corner, and goes left to right, top to bottom. This is the way data is extracted from the matrices in the netcdf files.
-
-```{r grid_new_label}
-# create matrix that labels the cell in the same way shapefile lists gridid
-mat <- apply(matrix(1:20838, nrow=151, ncol=138), 2, rev)
-# create second matrix that list matrix upper right, left to right 
-mat2 <- t(matrix(1:20838, nrow=138, ncol=151))
-
-# create id key
-id_key <- as_data_frame(cbind(as.vector(mat), as.vector(mat2))) %>% 
-  rename(WRFGRID_ID = V1, id = V2) %>% 
-  arrange(WRFGRID_ID)
-
-# add id to grid_sf
-grid_id_sf <- grid_sf %>% 
-  left_join(id_key, by = "WRFGRID_ID") %>% 
-  arrange(id)
-# assign wgs84 crs
-st_crs(grid_id_sf) <- wgs84
-```
-
-### Plot to check new IDs
-
-Plotting by new grid id to make sure it's listed in the correct order for joining to values from netcdf file. I've labeled each grid starting with the original WRFGRID_ID and the new id i created (WRFGRID_ID, id).
-
-```{r plot_new_id}
-# new subset
-grid_subset <- grid_id_sf %>% 
-  slice(1:10)
-# get cell names
-grid_names <- grid_subset %>% 
-  group_by(WRFGRID_ID) %>% 
-  mutate(lon = unlist(st_centroid(geometry))[1],
-         lat = unlist(st_centroid(geometry))[2]) %>% 
-  ungroup() %>% 
-  select(WRFGRID_ID, id, lon, lat) %>% 
-  # joining both ids 
-  mutate(joint_id = paste(WRFGRID_ID, id, sep=","))
-# convert simple featrues to dataframe
-st_geometry(grid_names) <- NULL
-
-# plot
-plot <- ggplot(grid_subset) +
-  geom_sf() +
-  geom_text(data=grid_names, aes(x=lon, y=lat,label= joint_id)) +
-  theme_minimal()
-
-plot
-```
-
-Projection looks good. I want to calculate proportion intersection for each county in these states.
+Projection looks good. I want to calculate proportion intersection for each county in these states. I will need to make sure I extract values from the NetCDF file in this way otherwise my population-weight calculations will be off.
 
 ## Calculation of proportion intersect
 
@@ -155,7 +105,7 @@ Going to calculate in a for loop because I haven't figured out a good apply or p
 
 ```{r propotion_intersect}
 # create empty dataframe
-prop_int_tibble <- grid_id_sf$id %>% 
+prop_int_tibble <- grid_sf$WRFGRID_ID %>% 
   tibble() %>% 
   rename(grid_id = ".")
 
@@ -168,18 +118,18 @@ for(i in 1:length(western_county_sf$FIPS)){
   # extract fips number for variable name
   fips_id <- paste0("fips_", county$FIPS)
   # subset grid cells that touch any part of the county
-  grid <- grid_id_sf[county,]
+  grid <- grid_sf[county,]
   # subset the intersected polygon
   inter_poly <- st_intersection(grid, county) %>% 
     # filter only to polygon or multipolygon type 
     # to avoid errors with point or line types
     filter(st_is(., c("POLYGON", "MULTIPOLYGON"))==T)
   # filter grid ids to only grids in the inter_poly object
-  grid2 <- grid %>% filter(id %in% inter_poly$id) 
+  grid2 <- grid %>% filter(WRFGRID_ID %in% inter_poly$WRFGRID_ID) 
   # find proportion intersect with original grid
   prop_int <- as.numeric(st_area(inter_poly)/st_area(grid2))
   # subset grid id
-  grid_id <- grid2$id
+  grid_id <- grid2$WRFGRID_ID
   # make a tibble
   county_grid_int <- tibble(grid_id, prop_int) %>% 
     set_names(c("grid_id", fips_id))
@@ -210,19 +160,19 @@ la_prop_int <- prop_int_tibble %>%
   filter(!is.na(fips_06037))
 
 # subset la grid
-la_grid <- grid_id_sf %>% 
-  filter(id %in% la_prop_int$grid_id) %>% 
-  left_join(la_prop_int, by = c("id" = "grid_id")) %>% 
+la_grid <- grid_sf %>% 
+  filter(WRFGRID_ID %in% la_prop_int$grid_id) %>% 
+  left_join(la_prop_int, by = c("WRFGRID_ID" = "grid_id")) %>% 
   rename(prop_int = fips_06037)
 
 # make a dataframe with rounded proportion values
 grid_names <- la_grid %>% 
   mutate(proportion = round(prop_int,2)) %>% 
-  group_by(id) %>% 
+  group_by(WRFGRID_ID) %>% 
   mutate(lon = unlist(st_centroid(geometry))[1],
          lat = unlist(st_centroid(geometry))[2]) %>% 
   ungroup() %>% 
-  select(id, lon, lat, proportion)
+  select(WRFGRID_ID, lon, lat, proportion)
 # convert simple featrues to dataframe
 st_geometry(grid_names) <- NULL
 
@@ -246,6 +196,7 @@ File will be used for calculations of county population-weighted PM.
 ```{r save_file, eval=F}
 # replace NAs with 0s
 wus_prop_int <- prop_int_tibble %>% 
+  rename(WRFGRID_ID = grid_id) %>% 
   mutate_all(funs(replace(., is.na(.), 0)))
 
 # save file
