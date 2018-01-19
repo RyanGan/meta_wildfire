@@ -15,8 +15,9 @@ Loading tidyverse for general data wrangling and plotting; netcdf4 for accessing
 
 ```{r setup, include=F}
 # libraries used
-library(tidyverse)
-library(ncdf4)
+library(tidyverse) 
+library(ncdf4) # package for working with .nc files
+library(sf)
 
 # general knitr options
 knitr::opts_chunk$set(fig.width = 7, fig.height = 5, 
@@ -38,36 +39,158 @@ Extracting grid points (matrix) and setting as vectors. When using the as.vector
 
 ```{r assemble_grid}
 # extract longitude as a vector
-lon <- as.vector(t(ncvar_get(smk_2015_nc, "glons")))
+lon <- ncvar_get(smk_2015_nc, "glons")
+dim(lon)
 # extract latitude as a vector
-lat <- as.vector(t(ncvar_get(smk_2015_nc, "glats")))
+lat <- ncvar_get(smk_2015_nc, "glats")
 # extract date as a vector (format yyyymmdd)
-date <- as.vector(ncvar_get(smk_2015_nc, "dates"))
-# kriging values
-krig_pm <- ncvar_get(smk_2015_nc, "kPM")
+date <- ncvar_get(smk_2015_nc, "dates")
 
+# vector of lat and lon
+lon_vec <- as.vector(lon)
+lat_vec <- as.vector(lat)
 # id sequence
 id <- 1:20838
 
 # bind together and plot to see where grids are
-id_location <- as_data_frame(cbind(id, lon, lat))
-
-# first 100 values 
-id_first100 <- id_location[1:100,]
-
-ggplot(id_first100, aes(x=lon, y=lat)) +
-  geom_text(aes(label = id), size = 2.5) +
-  xlim(min(lon), max(lon)) +
-  ylim(min(lat), max(lat))
+id_location <- as_data_frame(cbind(id, lon_vec, lat_vec))
 
 # last 100
-id_last100 <- id_location[20738:20838,]
-
-ggplot(id_last100, aes(x=lon, y=lat)) +
+id_toprow <- id_location[c(20563:20573, 20701:20710),]
+# plot of start of two top rows
+ggplot(id_toprow, aes(x=lon_vec, y=lat_vec)) +
   geom_text(aes(label = id), size = 2.5) +
-  xlim(min(lon), max(lon)) +
-  ylim(min(lat), max(lat))
+  xlim(-128, -125) +
+  ylim(49.5, 50)+
+  ggtitle("NetCDF cell locations: upper lefthand") +
+  theme_minimal()
 
+# first 100 values 
+id_bottomrow <- id_location[c(1:10, 139:149),]
+# plot of start of two bottom rows
+ggplot(id_bottomrow, aes(x=lon_vec, y=lat_vec)) +
+  geom_text(aes(label = id), size = 2.5) +
+  xlim(-123, -121) +
+  ylim(min(lat), 29.7) +
+  ggtitle("NetCDF cell locations: lower lefthand") +
+  theme_minimal()
 ```
 
+I need to align the way as.vector() extracts values from matrices in the NetCDF and how the shapefile WRFGRID_IDs are labeled.
 
+Working with smaller example matrices to make sure grids align.
+
+```{r test_mat}
+# example of how netcdf lat lon grid is arranged
+test_mat_cell_id <- t(apply(matrix(12:1, nrow=4, ncol=3, byrow = T),1,rev))
+test_mat_cell_id
+# example of how wrfgrid shapefile is arranged
+test_shape_mat <- apply(matrix(1:12, nrow=4, ncol=3), 2, rev)
+test_shape_mat
+
+# creation of test key
+test_key <- as_data_frame(cbind(as.vector(test_mat_cell_id),
+                                as.vector(test_shape_mat))) %>% 
+  rename(id = V1, WRFGRID_ID = V2)
+
+# check test key
+head(test_key)
+```
+
+Creating WRFGRID_ID variable that will match how values are extracted from the NetCDF file (bottom left corner, going left to right, bottom to top).
+
+Plots are checking the top and bottom lefthand corner to make sure grid IDs match the WRFGRID_ID variable in the shapefile.
+
+```{r wrfgrid_id}
+# 138 columns, 151 rows
+# recreating a matrix that matches values
+grid_id <- t(apply(matrix(20838:1, nrow=151, ncol=138, byrow = T),1,rev))
+# extracting values as a vector that matches grid values in netcdf
+cell_id <- as.vector(grid_id)
+
+# WRFGRID_ID matrix based on cell location
+wrf_id_mat <- apply(matrix(1:20838, nrow=151, ncol=138), 2, rev)
+# vector of WRFGRID_ID
+WRFGRID_ID <- as.vector(wrf_id_mat)
+
+# join WRFGRID_ID values to lat lon coordinates
+wrf_id_key <- as_data_frame(cbind(cell_id, WRFGRID_ID)) %>% 
+  rename(id = cell_id) %>% 
+  left_join(id_location, by = "id") %>% 
+  rename(lat = lat_vec, lon = lon_vec) %>% 
+  mutate(combine_id = paste(id, WRFGRID_ID, sep = ":"))
+
+# extract ids from upper lefthand corner
+id_toprow2 <- wrf_id_key %>% 
+  filter(id %in% c(20563:20573,20701:20710))
+# plot to check
+ggplot(id_toprow2, aes(x=lon, y=lat)) +
+  geom_text(aes(label = combine_id), size = 2.5) +
+  xlim(-128, -125) +
+  ylim(49.5, 50)+
+  ggtitle("Cell locations: upper lefthand (NetCDF ID : WRF ID)") +
+  theme_minimal()
+
+# check bottom row
+id_bottomrow2 <- wrf_id_key %>% 
+  filter(id %in% c(1:10, 139:149))
+# plot
+ggplot(id_bottomrow2, aes(x=lon, y=lat)) +
+  geom_text(aes(label = combine_id), size = 2.5) +
+  xlim(-123, -121) +
+  ylim(min(lat), 29.7) +
+  ggtitle("Cell locations: bottom lefthand (NetCDF ID : WRF ID)") +
+  theme_minimal()
+```
+
+## Checking PM values
+
+I'm going to check to make sure I can join values with the shapefile before I population-weight. Going to check dates 2015-08-02 and 2015-08-21 for the GWR model.
+
+```{r smoke_plots}
+# extracting gwr blended estimates for dates
+# kriging values in an array (x=151, y=138, z=122)
+gwr_pm <- ncvar_get(smk_2015_nc, "gwrPM")
+dim(gwr_pm)
+# find indices for dates I want to check
+which(date==20150802) # 63
+which(date==20150821) # 82
+
+# extract dates from array
+gwr_0802 <- as.vector(gwr_pm[,,63])
+gwr_0821 <- as.vector(gwr_pm[,,82])
+
+# bind with ids
+# bind together and plot to see where grids are
+gwr_check <- as_data_frame(cbind(id, lon_vec, lat_vec, 
+                                 gwr_0802, gwr_0821)) %>% 
+  # join WRFGRID ID in
+  left_join(wrf_id_key, by = "id") %>% 
+  select(-lon_vec, -lat_vec)
+
+# bind in with sf file and plot
+gwr_check_sf <- grid_sf %>% 
+  left_join(gwr_check, by = "WRFGRID_ID") %>% 
+  select(gwr_0802, gwr_0821) %>% 
+  # transforming variables
+  mutate(gwr_0802 = ifelse(gwr_0802 < 0, 0, gwr_0802),
+         gwr_0821 = ifelse(gwr_0821 < 0, 0, gwr_0821))
+
+ggplot(gwr_check_sf, aes(fill = gwr_0821)) +
+  geom_sf()
+
+# i think this should be a seperate chunk
+
+
+# fips code for states I want to look at
+western_state_fp <- c("04","06","08","16","53","41","32","49","56",
+                      "35", "30")
+# read county grid
+wus_sf <- st_read("./data/shapefile/us_state", 
+                  layer="cb_2016_us_state_20m") %>% 
+  filter(STATEFP %in% western_state_fp)
+
+# read grid sf
+grid_sf <- st_read("./data/shapefile/smoke_grid", layer="wus_grid2015-ko")
+
+```
