@@ -425,7 +425,7 @@ plot
 
 Plot of county population-weighted PM~2.5~ corresponds with the gridded plot.
 
-### Writing PM2.5 files
+### Writing PM~2.5~ files
 
 Writing county population-weighted files.
 
