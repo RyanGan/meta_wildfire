@@ -30,12 +30,12 @@ Connecting to PM netcdf file and printing summary. NetCDF file is a 3-dimentiona
 
 ```{r connect_nc}
 # open connection to netcdf 
-smk_2015_nc <- nc_open("./data/smoke/2015-smoke_pm_wus.nc")
+smk_2015_nc <- nc_open("../data/smoke/2015-smoke_pm_wus.nc")
 # print summary
 smk_2015_nc
 ```
 
-Extracting grid points (matrix) and setting as vectors. When using the as.vector function on matrix values from a netcdf, it will go row by row (left to right, then top to bottom). Plotting the latitude and longitude coordinates to check centroids of grid.
+Extracting grid points (matrix) and setting as vectors. When using the as.vector function on matrix values from a netcdf, it will go row by row (left to right, then top to bottom). 
 
 ```{r assemble_grid}
 # extract longitude as a vector
@@ -54,7 +54,11 @@ id <- 1:20838
 
 # bind together and plot to see where grids are
 id_location <- as_data_frame(cbind(id, lon_vec, lat_vec))
+```
 
+Plotting the latitude and longitude coordinates to check centroids of grid.
+
+```{r check_grid_ids}
 # last 100
 id_toprow <- id_location[c(20563:20573, 20701:20710),]
 # plot of start of two top rows
@@ -99,8 +103,6 @@ head(test_key)
 
 Creating WRFGRID_ID variable that will match how values are extracted from the NetCDF file (bottom left corner, going left to right, bottom to top).
 
-Plots are checking the top and bottom lefthand corner to make sure grid IDs match the WRFGRID_ID variable in the shapefile.
-
 ```{r wrfgrid_id}
 # 138 columns, 151 rows
 # recreating a matrix that matches values
@@ -119,7 +121,11 @@ wrf_id_key <- as_data_frame(cbind(cell_id, WRFGRID_ID)) %>%
   left_join(id_location, by = "id") %>% 
   rename(lat = lat_vec, lon = lon_vec) %>% 
   mutate(combine_id = paste(id, WRFGRID_ID, sep = ":"))
+```
 
+Plots are checking the top and bottom lefthand corner to make sure grid IDs match the WRFGRID_ID variable in the shapefile.
+
+```{r check_wrfid_plot}
 # extract ids from upper lefthand corner
 id_toprow2 <- wrf_id_key %>% 
   filter(id %in% c(20563:20573,20701:20710))
@@ -145,13 +151,13 @@ ggplot(id_bottomrow2, aes(x=lon, y=lat)) +
 
 ## Checking PM values
 
-I'm going to check to make sure I can join values with the shapefile before I population-weight. Going to check dates 2015-08-02 and 2015-08-21 for the GWR model.
+I am going to check that the PM values are spatially projected correctly by joining GWR PM values with the shapefile before I population-weight. Going to check dates 2015-08-02 and 2015-08-21 for the GWR model.
 
 ```{r smoke_plots}
 # extracting gwr blended estimates for dates
 # kriging values in an array (x=151, y=138, z=122)
 gwr_pm <- ncvar_get(smk_2015_nc, "gwrPM")
-dim(gwr_pm)
+
 # find indices for dates I want to check
 which(date==20150802) # 63
 which(date==20150821) # 82
@@ -168,29 +174,272 @@ gwr_check <- as_data_frame(cbind(id, lon_vec, lat_vec,
   left_join(wrf_id_key, by = "id") %>% 
   select(-lon_vec, -lat_vec)
 
-# bind in with sf file and plot
-gwr_check_sf <- grid_sf %>% 
-  left_join(gwr_check, by = "WRFGRID_ID") %>% 
-  select(gwr_0802, gwr_0821) %>% 
-  # transforming variables
-  mutate(gwr_0802 = ifelse(gwr_0802 < 0, 0, gwr_0802),
-         gwr_0821 = ifelse(gwr_0821 < 0, 0, gwr_0821))
-
-ggplot(gwr_check_sf, aes(fill = gwr_0821)) +
-  geom_sf()
-
-# i think this should be a seperate chunk
-
-
+# load sf objects
 # fips code for states I want to look at
 western_state_fp <- c("04","06","08","16","53","41","32","49","56",
                       "35", "30")
 # read county grid
-wus_sf <- st_read("./data/shapefile/us_state", 
+wus_sf <- st_read("../data/shapefile/us_state", 
                   layer="cb_2016_us_state_20m") %>% 
   filter(STATEFP %in% western_state_fp)
 
-# read grid sf
-grid_sf <- st_read("./data/shapefile/smoke_grid", layer="wus_grid2015-ko")
+# extract crs
+nad83 <- st_crs(wus_sf)
 
+# read grid sf
+grid_sf <- st_read("../data/shapefile/smoke_grid", layer="wus_grid2015-ko")
+# set projection
+st_crs(grid_sf) <- nad83
+
+# bind in with sf file 
+gwr_check_sf <- grid_sf %>% 
+  left_join(gwr_check, by = "WRFGRID_ID") %>% 
+  select(id, WRFGRID_ID, gwr_0802, gwr_0821) %>% 
+  # transforming variables
+  mutate(gwr_0802 = ifelse(gwr_0802 < 0, 0, gwr_0802),
+         gwr_0821 = ifelse(gwr_0821 < 0, 0, gwr_0821))
+
+# plot of PM over western US on 2015-08-21
+plot <- ggplot(wus_sf) +
+  geom_sf(color = "red", alpha = 0) +
+  geom_sf(data=gwr_check_sf, aes(fill = gwr_0821), 
+          color = "transparent", alpha = 0.8) +
+    scale_fill_gradient2(expression("PM2.5 µg/m"^3),
+      low = "white", mid= "#00dbde", high="#6a3093", midpoint = 60) +
+  ggtitle("GWR PM2.5 on 2015-08-21") +
+  theme_minimal()
+
+plot
+```
+
+The projection of PM~2.5~ looks good and matches satellite and WRF-chem estimates the Bonne provided that show the Eastern portion of Washington, Idaho, and Montana were impacted by smoke on 2015-08-21.
+
+## Setting up PM matrices
+
+I need to set up PM matrices where each row represents a WRFGRID and each column represents the day of estimation. I have alread extracted the GWR array from the NetCDF file. I need to extract krig and background array from NetCDF. I will also need to make estimates of smoke matrices, which are the cell values of krig and GWR subtracting off median values of each cell over the 122 days when no smoke was detected in the atmospheric column (assessed via HMS satellites). 
+
+I will use apply to extract the 3rd element of the array (date-specific values).
+
+```{r pm_matrices}
+# extract krig_pm and background_pm from nc file ----
+krig_pm <- ncvar_get(smk_2015_nc, "kPM")
+background_pm <- ncvar_get(smk_2015_nc, "gwr_background")
+
+# create cell x date matrices ----
+# apply function to extract pm values for each cell for each date as a vector
+krig_pm_mat <- apply(krig_pm, 3, as.vector)
+gwr_pm_mat <- apply(gwr_pm, 3, as.vector)
+# background has only one value
+background_pm_vec <- as.vector(background_pm) 
+
+# check that matrices were created correctly
+# dimensions look correct (20838 cells by 122 days)
+dim(gwr_pm_mat)
+# checking gwr matrix element column 82 to see if it matches values of gwr0821
+identical(gwr_pm_mat[,82], gwr_0821)
+
+# set values <0 to 0
+krig_pm_mat <- ifelse(krig_pm_mat < 0, 0, krig_pm_mat)
+gwr_pm_mat <- ifelse(gwr_pm_mat <0, 0, gwr_pm_mat)
+
+# create smoke estimates -----
+krig_pm_smk_mat <- krig_pm_mat - background_pm_vec
+gwr_pm_smk_mat <- gwr_pm_mat - background_pm_vec
+# set values lower than 0 to 0
+krig_pm_smk_mat <- ifelse(krig_pm_smk_mat < 0, 0, krig_pm_smk_mat)
+gwr_pm_smk_mat <- ifelse(gwr_pm_smk_mat < 0, 0, gwr_pm_smk_mat)
+```
+
+Now that I have the individual matrices set up, I will perform the same operations and functions on each of the krig and GWR matrices. I'm going to bind all the matrices in a list and run them through lapply functions. I need to appply WRFGRID IDs to the row names and dates to the column names and then sort by row id to make sure the values are in the correct order for when I population-weight using linear algebra.
+
+```{r assign_rowcolnames}
+# assign WRFGRID IDs as rownames
+# extract vector of arranged WRFGRID IDs that match cell IDs for rownames
+WRFGRID <- arrange(wrf_id_key, id)$WRFGRID_ID
+# extract dates for column names
+date_vec <- paste0("date", date)
+
+# create list of pm values
+pm_list <- list(krig_pm_mat, krig_pm_smk_mat, gwr_pm_mat, gwr_pm_smk_mat)
+# assign names to pm_list
+names(pm_list) <- c("krig", "krig_smk", "gwr", "gwr_smk")
+
+# lapply row and column names and sort by WRFGRID Cell
+pm_list <- lapply(pm_list, function(x){
+  colnames(x) <- date_vec
+  rownames(x) <- WRFGRID
+  x <- x[order(as.numeric(row.names(x))),]
+})
+```
+
+I'm going to check that the cell values are in the correct order. To do that, I'll check the vector of GWR estimates on 2015-08-21 from the map I created above with the vector of GWR on 2015-08-21 in the list. If these two vectors match, the sorting of the matrices in the list worked.
+
+```{r pm_check}
+# sorted id
+# extract gwr values as a vector on 08-21 from sf file
+gwr0821_check <- arrange(gwr_check_sf, WRFGRID_ID)$gwr_0821
+# extract gwr values from list on 08-21
+gwr0821_check2 <- pm_list[[3]][,82]
+# remove names on vector
+names(gwr0821_check2) <- NULL
+
+# check first 6 values
+head(gwr0821_check)
+head(gwr0821_check2)
+# check summary stats
+summary(gwr0821_check)
+summary(gwr0821_check2)
+# check identical
+identical(gwr0821_check, gwr0821_check2)
+```
+
+Checks show that the matrices are in the correct order and ready to be population-weighted.
+
+## Population-Weighting
+
+Now that the matrices are ready, I need to read in the proportion intersection file and population density file.
+
+I'm going to read the population density file first and plot to make sure it looks like the grid correctly aligns with where most people live. I need to check the density unit; pretty sure it's persons per km^2
+
+```{r popdensity}
+# load population density per grid file
+popgrid <- read_csv("../data/smoke/2015-smoke_popgrid_wus.csv") %>% 
+  rename(WRFGRID_ID = GRID_ID)
+
+# create population grid matrix/vector for use later
+pop_vec <- popgrid$PopDensity
+
+# joining with grid sf object
+pop_check_sf <- grid_sf %>% 
+  left_join(popgrid, by = "WRFGRID_ID") %>% 
+  # filter out places without people to make plotting easier
+  filter(PopDensity > 100)
+
+# plot of PM over western US on 2015-08-21
+plot <- ggplot(wus_sf) +
+  geom_sf(color = "black", alpha = 0) +
+  geom_sf(data=pop_check_sf, aes(fill = PopDensity), 
+          color = "transparent") +
+    scale_fill_gradient("Population Density km^2",
+      low = "white", high="red") +
+  ggtitle("Population Density 2015 of grids > 100 persons km^2") +
+  theme_minimal()
+
+plot
+```
+
+Looks like the population density map shows the major population centers in the Western US. I only plotted densities > 100 to elimate a lot of sparsely populated grids to plot faster.
+
+Loading in proportion intersect values I calculated in the 2015-smoke_gridcounty_intersection script.
+
+```{r load_propint}
+# load proportion intersect file; default columns as numeric
+propint <- read_csv("../data/smoke/2015-smoke_propint_wus.csv", 
+                    col_types = cols(.default = "n"))
+
+# save fips vector; leaving out wrfgrid id column
+fips <- stringr::str_sub(colnames(propint[,-1]), start = 6)
+
+# create proportion intersect matrix
+pi_mat <- as.matrix(propint[,-1])
+# dimensions of pi matrix
+dim(pi_mat)
+```
+
+I saved a vector of FIPS (state and county) IDs that I will use later in labeling. Produced a 20838 (cell) by 414 (county) matrix.
+
+### Note: enter formula here
+
+### County population-weighted PM
+
+Adding background PM vector to PM list so that I can population-weight all at once.
+
+```{r updated_pm_list}
+# background pm matrix
+background_mat <- as.matrix(background_pm_vec)
+# assign wrfgrid rownames and sort
+rownames(background_mat) <- WRFGRID
+# order by wrfgrid
+background_mat <- as.matrix(background_mat[order(as.numeric(
+  row.names(background_mat))),])
+# colname of background median
+colnames(background_mat) <- "median"
+
+# recreating list using elements from other list to preserve variables/order
+pm_list2 <- list(pm_list[[1]], pm_list[[2]], pm_list[[3]], 
+                 pm_list[[4]], background_mat)
+# adding new name
+names(pm_list2) <- c("krig", "krig_smk", "gwr", "gwr_smk", "background")
+```
+
+Creating a list of daily county population-weighted PM estimates and background PM estimates.
+
+```{r popwt_pm}
+# estimating county population density and inverse for use in formula
+# estimate of population density per county
+popden_county <- t(pi_mat) %*% pop_vec
+# calcuate the inverse of county population density
+popden_county_inverse <- 1/popden_county
+
+popwt_pm_list <- lapply(pm_list2, function(x){
+  # multiply population vector by pm matrices
+    pm_pop_mat <- pop_vec * x
+  # multiply pm population matrix by county/grid intersection matrix 
+  # produces a summed estimate of pm values in a county for each day
+    county_pm_sum_mat <- t(pi_mat) %*% pm_pop_mat
+  # multiple county summed PM values by inverse of county population density
+  # produces county population weighted PM estimates for each day
+    county_popwt_pm <- county_pm_sum_mat * as.vector(popden_county_inverse)
+  
+  # create dataframe and join in FIPS id
+    pm_county_wt <- as_data_frame(cbind(fips, county_popwt_pm)) %>% 
+  # convert characters to numeric
+      mutate_at(vars(-fips), funs(as.numeric))
+  # return dataframe
+  return(pm_county_wt)
+})
+```
+
+Plot of 2015-08-21 county-population weighted GWR estimates of PM.
+
+```{r popwt_plot}
+# read county sf and limit to western US
+county_sf <- st_read("../data/shapefile/us_county", layer="us_county") %>% 
+  mutate(fips = paste0(STATEFP, COUNTYFP)) %>% 
+  filter(STATEFP %in% western_state_fp) %>% 
+  # join gwr population-weighted values to sf object
+  left_join(as_data_frame(popwt_pm_list$gwr), by = "fips")
+
+# plot of county PM over western US on 2015-08-21
+plot <- ggplot(wus_sf) +
+  geom_sf(color = "black", alpha = 0) +
+  geom_sf(data = county_sf, aes(fill = date20150821), 
+          color = "transparent", alpha = 0.8) +
+    scale_fill_gradient2(expression("PM2.5 µg/m"^3),
+      low = "white", mid= "#00dbde", high="#6a3093", midpoint = 50) +
+  ggtitle("County GWR PM2.5 on 2015-08-21") +
+  theme_minimal()
+
+plot
+```
+
+Plot of county population-weighted PM~2.5~ corresponds with the gridded plot.
+
+### Writing PM2.5 files
+
+Writing county population-weighted files.
+
+```{r write_popwt, eval=F}
+# define write path
+write_path <- "../data/smoke/"
+
+# writing lapply to write all files in the population wt list 
+lapply(1:length(popwt_pm_list), function(x){
+  # write_name
+  write_name <- paste0("2015-smoke_county_popwt_",
+                       names(popwt_pm_list[x]),".csv")
+  # save csv file
+  write_csv(popwt_pm_list[[x]], paste0(write_path,write_name))
+})
+# Note: I'm not sure why it printed out each tibble when it wrote the file
 ```
