@@ -1,0 +1,160 @@
+---
+title: "Wildfire Smoke and Mortality "
+author: Ryan Gan
+output: html_notebook
+editor_options: 
+  chunk_output_type: inline
+---
+
+## Introduction
+
+I'm trying out an R notebook again. I've tried it before, but never really gave it much of a chance.
+
+This notebook contains code and methods to evaluate the association between wildfire smoke and mortality. 
+
+```{r kniter_opt}
+knitr::opts_chunk$set(fig.height = 6, fig.width = 8)
+```
+
+### Data Import
+
+Loading the tidyverse package, which contains most packages I will need for data cleaning, visualizations, and analysis.
+
+```{r tidyverse}
+library(tidyverse)
+```
+
+First step is to import the mortality counts by county and join them to daily county population-weighted estimates of smoke PM~2.5~. 
+
+Importing daily counts of Colorado mortality estimates from 2010 to 2016.
+
+```{r mortality_import}
+# define relative path to data folder
+mortality_path <- paste0("../data/health/2010-2016_mortality_co_ts.csv")
+# read in dataframe using read_csv function from tidyverse package
+co_mortality <- read_csv(mortality_path) %>% 
+  # rename fips to lowercase to bind with PM2.5 data; rename date 
+  rename(fips = FIPS, 
+         date = date_of_death)
+```
+
+Producing quick view of mortality time-series dataframe. Observations are the same as counts of all-cause mortality. Note, I may not be able to present data in this way since it may violate some data use agreements with CDPHE. Something to be aware of.
+
+```{r mortality_head}
+head(co_mortality)
+```
+
+Importing daily county estimates of pouplation-weighted PM~2.5~ for Western US and subsetting to only Colorado counties.
+
+```{r pm_import}
+# output vector of colorado fips
+co_fips <- unique(co_mortality$fips)
+
+# read pm data and subset to colorado
+pm_path <- paste0("../data/smoke/2015-smoke_wus_county_popwt.csv")
+co_pm <- read_csv(pm_path) %>% 
+  # filter to colorado
+  filter(fips %in% co_fips)
+```
+
+View first 6 observations of Colorado PM~2.5~ time series.
+
+```{r pm_head}
+head(co_pm)
+```
+
+Before I join the mortality counts with PM~2.5~ values I am going to perform some descriptives statistics and visualizations.
+
+## Mortality Trend
+
+Aggregating county mortality counts to get an idea of the overall state trend for Colorado from 2010 to 2016. I'm also seeting up the dataframe for plotting as small-multiples by outcome.
+
+### Daily 
+
+```{r death_aggregate}
+co_agg_death <- co_mortality %>% 
+  group_by(date) %>% 
+  summarise(all_cause = sum(all_cause), cvd = sum(cvd), 
+             heartdis = sum(heartdisease), heartattack = sum(heartattack),
+            copd = sum(copd), asthma = sum(asthma)) %>% 
+  gather("outcome", "n", all_cause:asthma)
+```
+
+Plotting time series of mortality over time by outcome.
+
+```{r daily_mortality_plot}
+ggplot(co_agg_death, aes(x=date, y=n)) +
+  geom_point(size = 0.5) +
+  facet_wrap(~outcome, scales = "free_y") +
+  ggtitle("Daily deaths in Colorado, 2010 to 2016") +
+  theme_minimal()
+```
+
+For all-cause, it looks like there is a seasonal trend with deaths, and that daily death counts have been increasing steadily over time. This is not too suprising since the population of Colorado has been increasing. For the other outcomes It's hard to see any trends due to small numbers of deaths on any particular day.
+
+### Weekly
+
+Going to aggregate all the deaths over the week.
+
+```{r death_week_agg}
+co_agg_death <- co_mortality %>% 
+  mutate(date_week = lubridate::floor_date(date, "week")) %>% 
+  group_by(date_week) %>% 
+  summarise(all_cause = sum(all_cause), cvd = sum(cvd), 
+             heartdis = sum(heartdisease), heartattack = sum(heartattack),
+            copd = sum(copd), asthma = sum(asthma)) %>% 
+  gather("outcome", "n", all_cause:asthma)
+```
+
+Plot of weekly mortality from 2010 to 2016.
+
+```{r weekly_mortality_plot}
+ggplot(co_agg_death, aes(x=date_week, y=n)) +
+  geom_point(size = 0.5) +
+  facet_wrap(~outcome, scales = "free_y") +
+  ggtitle("Weekly deaths in Colorado, 2010 to 2016") +
+  theme_minimal()
+```
+
+The seasonal pattern and overall trend with all-cause is more pronounced. Other outcomes are still hard to see any trends due to small numbers. CVD has no trend, but there are some low counts around what I'm guessing is the Christmas holiday. I've seen this trend before with other states and it's not suprising.
+
+Note that I don't have all-respiratory as an underlying cause of death since I'm using codes Kirk from CDPHE provided. I can code respiratory and will likely do this later. Rish probably knows the ICD codes for this. I should ask him.
+
+There is an intersting peak for all-cause around 2015. I'm going to see if I can't narrow in on a date.
+
+```{r all_cause_2015}
+co_2015_allcause <- co_mortality %>% 
+  filter(date >= "2014-12-01" & date <= "2015-12-31") %>% 
+  mutate(date_week = lubridate::floor_date(date, "week")) %>% 
+  group_by(date_week) %>% 
+  group_by(date_week) %>% 
+  summarise(all_cause = sum(all_cause))
+```
+
+Plot of 2015 all-cause mortality
+
+```{r 2015_mortality_plot}
+ggplot(co_2015_allcause, aes(x=date_week, y=all_cause)) +
+  geom_point(size = 0.5) +
+  ggtitle("Weekly deaths in Colorado, 2015") +
+  theme_minimal()
+```
+
+That peak looks like it was the week of New Years. I wonder if some event is tied to it? I briefly googled for cold snaps or air pollution but nothing came up. May just be noise or an unusually high couple of weeks.
+
+## PM~2.5~ Trend
+
+I'm going to look at the trends in PM~2.5~ estimated using geographically-weighted ridge regression (GWR blended method) and kriging.
+
+```{r gwr_plot}
+ggplot(co_pm, aes(x=date, y = gwr)) +
+  geom_point() +
+  facet_wrap(~as.factor(fips)) +
+  theme_minimal()
+
+?theme
+```
+
+
+
+
