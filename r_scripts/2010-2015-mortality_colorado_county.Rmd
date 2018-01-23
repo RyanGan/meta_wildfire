@@ -1,0 +1,100 @@
+---
+title: "Colorado County Mortality Counts"
+author: "Ryan Gan"
+date: "1/23/2018"
+output: html_document
+---
+
+## Purpose
+
+This markdown documents contains code for aggregation of daily counts of cardiopulmonary mortality in Colorado for each county from 2010 to 2015 using vital statistics data provided to us by the Colorado Department of Public Health and the Environment.
+
+Calling Tidyverse library and setting knitr options for document.
+
+```{r setup}
+library(tidyverse)
+
+# knitr options
+knitr::opts_chunk$set(fig.width=8, fig.height=6, 
+                      warning=FALSE, message=FALSE)
+```
+
+Loading mortality data provided by the Colorado Department of Public Health and the Environment from 2010 to 2016. Some data formating and wrangling is also done here (i.e. formatting date.
+
+```{r data_load}
+# read county names/fips dataframe
+fips_path <- paste0("../../colorado_wildfire/data/shapefiles/",
+  "colorado_county_fips.csv")
+
+colorado_fips <- read_csv(fips_path, col_types = cols(.default = "c")) %>% 
+  # remove var
+  select(-var) %>% 
+  mutate(state_fips = paste0("0", state_fips),
+         county_fips = stringr::str_sub(paste0("00", county_fips), start = -3),
+         FIPS = paste0(state_fips, county_fips),
+         # remove "county" from end of county name
+         county = stringr::str_sub(county_name, end = -8)) %>% 
+  select(FIPS, county)
+                                
+# read mortality data in
+read_path <- paste0(".../../colorado_wildfire/data/health/co_death_2016.csv") 
+
+co_mortality_2010_2016 <- read_csv(read_path) %>% 
+  mutate(date_of_death = as.Date(dod, format = "%m%d%Y"),
+         # race categories
+         race_cat = as.factor(
+           case_when(race == 0 ~ "other_asian_pacific",
+                     race == 1 ~ "white",
+                     race == 2 ~ "black", 
+                     race == 3 ~ "american_indian",
+                     race == 4 ~ "chinese",
+                     race == 5 ~ "japanese",
+                     race == 6 ~ "hawaiian",
+                     race == 7 ~ "other_nonwhite",
+                     race == 8 ~ "filipino",
+                     race == 9 ~ "unknown")),
+         hisp_cat = as.factor(
+           case_when(origin == 0 ~ "non_hispanic",
+                     origin == 1 ~ "mexican",
+                     origin == 2 ~ "puerto_rican",
+                     origin == 3 ~ "cuban",
+                     origin == 4 ~ "central_south_american",
+                     origin == 5 ~ "other_spanish",
+                     origin == 9 ~ "unknown")),
+      FIPS = paste0("08", stringr::str_sub(paste0("00",coor), start = -3))) %>%
+  # join county names in
+  left_join(colorado_fips, by = "FIPS")
+
+```
+
+### Distribution of date of death
+
+Plotting general density of date of death. I see seasonal fluctuations and a general increase over time. Note that this doesn't account for population.
+
+```{r date_distribution}
+ggplot(data = co_mortality_2010_2016, aes(x = date_of_death)) +
+  geom_density() +
+  theme_minimal()
+```
+
+County-level daily mortality counts for all cause and specific cardiopulmonary underlying cause based on ICD-10. I may add more categories later.
+
+```{r mortality_timeseries}
+colorado_county_mortality_ts <- co_mortality_2010_2016 %>% 
+  group_by(date_of_death, county) %>% 
+  summarise(obs = n(), all_cause = sum(cod_total), 
+            cvd = sum(cod_cardiovascular),
+            heartdisease = sum(cod_heartdisease),
+            heartattack = sum(cod_heartattack),
+            copd = sum(cod_copd),
+            asthma = sum(cod_asthma)) %>% 
+  mutate_at(vars(all_cause:asthma), funs(ifelse(is.na(.), 0, .)))
+```
+
+I'm going to create a permanent CSV file and use it to pilot code for the mortality piece of the time-series study.
+
+```{r write_data}
+write_path <- paste0("./data/health/co_mortality_ts.csv")
+
+write_csv(colorado_county_mortality_ts, write_path)
+```
