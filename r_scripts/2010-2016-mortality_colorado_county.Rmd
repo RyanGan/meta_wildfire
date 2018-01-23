@@ -23,21 +23,22 @@ Loading mortality data provided by the Colorado Department of Public Health and 
 
 ```{r data_load}
 # read county names/fips dataframe
-fips_path <- paste0("../../colorado_wildfire/data/shapefiles/",
-  "colorado_county_fips.csv")
+fips_path <- paste0("../colorado_wildfire/",
+  "data/shapefiles/colorado_county_fips.csv")
 
 colorado_fips <- read_csv(fips_path, col_types = cols(.default = "c")) %>% 
   # remove var
   select(-var) %>% 
   mutate(state_fips = paste0("0", state_fips),
-         county_fips = stringr::str_sub(paste0("00", county_fips), start = -3),
+         county_fips = stringr::str_sub(paste0("00", county_fips), 
+                                        start = -3),
          FIPS = paste0(state_fips, county_fips),
          # remove "county" from end of county name
          county = stringr::str_sub(county_name, end = -8)) %>% 
   select(FIPS, county)
-                                
+                
 # read mortality data in
-read_path <- paste0(".../../colorado_wildfire/data/health/co_death_2016.csv") 
+read_path <- paste0("../colorado_wildfire/data/health/co_death_2016.csv") 
 
 co_mortality_2010_2016 <- read_csv(read_path) %>% 
   mutate(date_of_death = as.Date(dod, format = "%m%d%Y"),
@@ -81,7 +82,7 @@ County-level daily mortality counts for all cause and specific cardiopulmonary u
 
 ```{r mortality_timeseries}
 colorado_county_mortality_ts <- co_mortality_2010_2016 %>% 
-  group_by(date_of_death, county) %>% 
+  group_by(date_of_death, FIPS) %>% 
   summarise(obs = n(), all_cause = sum(cod_total), 
             cvd = sum(cod_cardiovascular),
             heartdisease = sum(cod_heartdisease),
@@ -94,7 +95,7 @@ colorado_county_mortality_ts <- co_mortality_2010_2016 %>%
 I'm going to create a permanent CSV file and use it to pilot code for the mortality piece of the time-series study.
 
 ```{r write_data}
-write_path <- paste0("./data/health/co_mortality_ts.csv")
+write_path <- paste0("./data/health/2010-2016_mortality_co_ts.csv")
 
 write_csv(colorado_county_mortality_ts, write_path)
 ```
