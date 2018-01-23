@@ -427,10 +427,10 @@ Plot of county population-weighted PM~2.5~ corresponds with the gridded plot.
 
 ### Writing PM~2.5~ files
 
-Writing county population-weighted files.
+Final data wragling. Writing county population-weighted files.
 
 ```{r write_popwt, eval=F}
-# define write path
+# define write path for each unique file
 write_path <- "../data/smoke/"
 
 # writing lapply to write all files in the population wt list 
@@ -442,4 +442,26 @@ lapply(1:length(popwt_pm_list), function(x){
   write_csv(popwt_pm_list[[x]], paste0(write_path,write_name))
 })
 # Note: I'm not sure why it printed out each tibble when it wrote the file
+
+# creating and writing a file that is easier to merge with epi data
+# vector of method
+method <- rep(names(popwt_pm_list[1:4]),each=50508)
+# data wrangle with a for loop
+popwt_pm_df <- popwt_pm_list[1:4] %>% 
+    map_dfr(function(x) 
+      gather(x, "date", "pm", -1) %>% 
+      # transform date
+      mutate(date = as.Date(stringr::str_sub(date, start=5), 
+                            format = "%Y%m%d"))) %>% 
+  # bind in method name
+  cbind(method) %>% 
+  # spread method to unique columns
+  spread(method, pm) %>% 
+  # bind in background pm by fips
+  left_join(popwt_pm_list[[5]], by = "fips") %>% 
+  # rename background
+    rename(background_med = median)
+
+# write file
+write_csv(popwt_pm_df, "./data/smoke/2015-smoke_wus_county_popwt.csv")
 ```
