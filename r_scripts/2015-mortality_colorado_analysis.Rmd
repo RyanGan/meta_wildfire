@@ -13,20 +13,21 @@ I'm trying out an R notebook again. I've tried it before, but never really gave 
 This notebook contains code and methods to evaluate the association between wildfire smoke and mortality. 
 
 ```{r kniter_opt}
-knitr::opts_chunk$set(fig.height = 6, fig.width = 8)
+knitr::opts_chunk$set(fig.height = 6, fig.width = 8, fig.align = "center")
 ```
 
 ### Data Import
 
-Loading the tidyverse package, which contains most packages I will need for data cleaning, visualizations, and analysis.
+Loading the tidyverse package, which contains most packages I will need for data cleaning, visualizations, and analysis. Loading stringr package for character string manipulation.
 
 ```{r tidyverse}
 library(tidyverse)
+library(stringr)
 ```
 
 First step is to import the mortality counts by county and join them to daily county population-weighted estimates of smoke PM~2.5~. 
 
-Importing daily counts of Colorado mortality estimates from 2010 to 2016.
+Importing census county population denominators and joining to daily counts of Colorado mortality estimates from 2010 to 2016.
 
 ```{r mortality_import}
 # define relative path to data folder
@@ -38,13 +39,30 @@ co_mortality <- read_csv(mortality_path) %>%
          date = date_of_death)
 ```
 
-Producing quick view of mortality time-series dataframe. Observations are the same as counts of all-cause mortality. Note, I may not be able to present data in this way since it may violate some data use agreements with CDPHE. Something to be aware of.
+Producing quick view of mortality time-series data frame. Observations are the same as counts of all-cause mortality. Note, I may not be able to present data in this way since it may violate some data use agreements with CDPHE. Something to be aware of.
 
 ```{r mortality_head}
 head(co_mortality)
 ```
 
-Importing daily county estimates of pouplation-weighted PM~2.5~ for Western US and subsetting to only Colorado counties.
+Importing Census estimates of Colorado county populations from 2010 to 2016 to calculate rates.
+
+```{r county_population}
+# define path 
+pop_path <- paste0("../data/census/2016-colorado_population.csv")
+# read in population and edit some variable names
+co_pop <- read_csv(pop_path) %>% 
+  select(GEO.id2, 'GEO.display-label', respop72010:respop72016) %>% 
+  rename(fips = GEO.id2, county = 'GEO.display-label') %>% 
+  rename_at(vars(respop72010:respop72016), 
+            funs(paste0("pop",str_sub(., start=8)))) %>% 
+  # take out state name and "county" from county name
+  mutate(county = str_split_fixed(county, " County", n=2)[,1])
+```
+
+Importing daily county estimates of population-weighted PM~2.5~ for Western US and sub setting to only Colorado counties. I'm also creating binary classifiers of days when I think smoke is present vs. not present based on the estimated PM~2.5~ value. I usually look at classification of smoke > 0, > 5, > 10, > 15 ug/m^3^. 
+
+I also code a smoke-wave day which is defined as two days over the 98^th^ percentile of all PM~2.5~ observations. For the entire Western US, the 98th percentile in the GWR model is 36.76 ug/m^3^. In general, I find it agrees with > 15 cutoff. However, I think it may not agree with so few days in this subset of PM~2.5~ values as this period is a relatively short period with a lot of wildfire smoke and thus may skew the 98^th^ percentile higher than it normally would be. I will need to revisit this.
 
 ```{r pm_import}
 # output vector of colorado fips
@@ -54,7 +72,17 @@ co_fips <- unique(co_mortality$fips)
 pm_path <- paste0("../data/smoke/2015-smoke_wus_county_popwt.csv")
 co_pm <- read_csv(pm_path) %>% 
   # filter to colorado
-  filter(fips %in% co_fips)
+  filter(fips %in% co_fips) %>% 
+  mutate(smoke0 = ifelse(gwr_smk > 0, 1, 0),
+         smoke5 = ifelse(gwr_smk > 5, 1, 0),
+         smoke10 = ifelse(gwr_smk > 10, 1, 0),
+         smoke15 = ifelse(gwr_smk > 15, 1, 0)) %>% 
+  # create smoke wave (98th perctile for 2 days)
+  group_by(fips) %>% 
+  arrange(fips, date) %>% 
+  mutate(high_pm_day = ifelse(gwr >= 36.76, 1, 0),
+         smoke_wave = ifelse(lag(high_pm_day, order_by = fips)==1 &
+                               high_pm_day==1, 1, 0))
 ```
 
 View first 6 observations of Colorado PM~2.5~ time series.
@@ -63,24 +91,39 @@ View first 6 observations of Colorado PM~2.5~ time series.
 head(co_pm)
 ```
 
-Before I join the mortality counts with PM~2.5~ values I am going to perform some descriptives statistics and visualizations.
+No smoke wave days; distribution in the Pacific Northwest likely skewing distribution way too high to be useful for Colorado.
+
+Before I join the mortality counts with PM~2.5~ values I am going to perform some descriptive statistics and visualizations.
 
 ## Mortality Trend
 
-Aggregating county mortality counts to get an idea of the overall state trend for Colorado from 2010 to 2016. I'm also seeting up the dataframe for plotting as small-multiples by outcome.
+Aggregating county mortality counts to get an idea of the overall state trend for Colorado from 2010 to 2016. I'm also setting up the data frame for plotting as small-multiples by outcome.
 
 ### Daily 
 
+Code to sum events and population across all counties to estimate Colorado trends. Joining aggregated populations to death counts. I was just thinking that assigning the yearly population may not be the best way, and that I could probably calculate a daily population based on the rate of change from one year to the next. However, I think this can wait.
+
 ```{r death_aggregate}
+# population
+pop_agg <- co_pop %>% 
+  gather("year", "population", pop2010:pop2016) %>% 
+  mutate(year = as.numeric(str_sub(year, start=4))) %>% 
+  group_by(year) %>% 
+  summarise(population = sum(population))
+# deaths
 co_agg_death <- co_mortality %>% 
   group_by(date) %>% 
   summarise(all_cause = sum(all_cause), cvd = sum(cvd), 
              heartdis = sum(heartdisease), heartattack = sum(heartattack),
             copd = sum(copd), asthma = sum(asthma)) %>% 
-  gather("outcome", "n", all_cause:asthma)
+  gather("outcome", "n", all_cause:asthma) %>% 
+  mutate(year = lubridate::year(date)) %>% 
+  left_join(pop_agg, by = "year") %>% 
+  mutate(death_rate1mil = (n/population)*1000000)
 ```
 
-Plotting time series of mortality over time by outcome.
+#### Daily Counts
+Plotting time series of mortality counts over time by outcome.
 
 ```{r daily_mortality_plot}
 ggplot(co_agg_death, aes(x=date, y=n)) +
@@ -90,7 +133,20 @@ ggplot(co_agg_death, aes(x=date, y=n)) +
   theme_minimal()
 ```
 
-For all-cause, it looks like there is a seasonal trend with deaths, and that daily death counts have been increasing steadily over time. This is not too suprising since the population of Colorado has been increasing. For the other outcomes It's hard to see any trends due to small numbers of deaths on any particular day.
+For all-cause, it looks like there is a seasonal trend with deaths, and that daily death counts have been increasing steadily over time. This is not too surprising since the population of Colorado has been increasing. For the other outcomes It's hard to see any trends due to small numbers of deaths on any particular day.
+
+#### Daily Rate
+
+Plotting daily rates per 100,000 persons.
+```{r daily_rate_plot}
+ggplot(co_agg_death, aes(x=date, y=death_rate1mil)) +
+  geom_point(size = 0.5) +
+  facet_wrap(~outcome, scales = "free_y") +
+  ggtitle("Daily death rate per 1 million in Colorado, 2010 to 2016") +
+  theme_minimal()
+```
+
+Stabilized the upward trend a bit in all-cause, but overall, it's pretty similar. 
 
 ### Weekly
 
@@ -103,9 +159,14 @@ co_agg_death <- co_mortality %>%
   summarise(all_cause = sum(all_cause), cvd = sum(cvd), 
              heartdis = sum(heartdisease), heartattack = sum(heartattack),
             copd = sum(copd), asthma = sum(asthma)) %>% 
-  gather("outcome", "n", all_cause:asthma)
+  gather("outcome", "n", all_cause:asthma) %>% 
+  mutate(year = lubridate::year(date_week)) %>%
+  filter(year != 2009) %>% 
+  left_join(pop_agg, by = "year") %>% 
+  mutate(death_rate1mil = (n/population)*1000000)
 ```
 
+#### Weekly Counts
 Plot of weekly mortality from 2010 to 2016.
 
 ```{r weekly_mortality_plot}
@@ -116,11 +177,24 @@ ggplot(co_agg_death, aes(x=date_week, y=n)) +
   theme_minimal()
 ```
 
-The seasonal pattern and overall trend with all-cause is more pronounced. Other outcomes are still hard to see any trends due to small numbers. CVD has no trend, but there are some low counts around what I'm guessing is the Christmas holiday. I've seen this trend before with other states and it's not suprising.
+The seasonal pattern and overall trend with all-cause is more pronounced. Other outcomes are still hard to see any trends due to small numbers. CVD has no trend, but there are some low counts around what I'm guessing is the Christmas holiday. I've seen this trend before with other states and it's not surprising.
 
 Note that I don't have all-respiratory as an underlying cause of death since I'm using codes Kirk from CDPHE provided. I can code respiratory and will likely do this later. Rish probably knows the ICD codes for this. I should ask him.
 
-There is an intersting peak for all-cause around 2015. I'm going to see if I can't narrow in on a date.
+#### Weekly Rates
+
+Plotting weekly rates to see trends.
+```{r weekly_rate_plot}
+ggplot(co_agg_death, aes(x=date_week, y=death_rate1mil)) +
+  geom_point(size = 0.5) +
+  facet_wrap(~outcome, scales = "free_y") +
+  ggtitle("Weekly death rate per 1 million in Colorado, 2010 to 2016") +
+  theme_minimal()
+```
+
+### Mortality 2015
+
+There is an interesting peak for all-cause around 2015. I'm going to see if I can't narrow in on a date.
 
 ```{r all_cause_2015}
 co_2015_allcause <- co_mortality %>% 
@@ -142,19 +216,188 @@ ggplot(co_2015_allcause, aes(x=date_week, y=all_cause)) +
 
 That peak looks like it was the week of New Years. I wonder if some event is tied to it? I briefly googled for cold snaps or air pollution but nothing came up. May just be noise or an unusually high couple of weeks.
 
-## PM~2.5~ Trend
+### Daily June through September 2015
 
-I'm going to look at the trends in PM~2.5~ estimated using geographically-weighted ridge regression (GWR blended method) and kriging.
+Subsetting to June 1 to September 30th, 2015. These are dates I have PM~2.5~ data from.
 
-```{r gwr_plot}
-ggplot(co_pm, aes(x=date, y = gwr)) +
-  geom_point() +
-  facet_wrap(~as.factor(fips)) +
-  theme_minimal()
-
-?theme
+```{r summer_mortality}
+co_summer_2015 <- co_mortality %>% 
+  filter(date >= "2015-06-01" & date <= "2015-09-30") %>% 
+  group_by(date) %>% 
+  summarise(all_cause = sum(all_cause), cvd = sum(cvd), 
+             heartdis = sum(heartdisease), heartattack = sum(heartattack),
+            copd = sum(copd), asthma = sum(asthma)) %>% 
+  gather("outcome", "n", all_cause:asthma)
 ```
 
+Evaluating mortality time series for any potential pattern.
 
+```{r summer_mortality_plot}
+ggplot(co_summer_2015, aes(x=date, y=n)) +
+  geom_point(size = 0.5) +
+  facet_wrap(~outcome, scales = "free_y") +
+  ggtitle("Weekly deaths in Colorado, 2015") +
+  theme_minimal()
+```
 
+## PM~2.5~ Trend
+
+I'm going to look at the trends in PM~2.5~ estimated using geographically-weighted ridge regression (GWR blended method) and kriging. 
+
+### Smoke Map
+
+First thing I am going to do is look at the spatial resolution of smoke using counts of number of smoke days by county with a map. I will use the "sf" package, which works with tidyverse. However, "sf" requires the latest version of R and also requires the development version of ggplot.
+
+```{r library_sf}
+library(sf)
+```
+
+Counting up smoke days using the > 10 ug/m^3^ cutoff for GWR smoke in each county.
+
+```{r smoke_count}
+# count up smoke events for each county
+smoke_count <- co_pm %>% 
+  group_by(fips) %>% 
+  summarise(smoke0 = sum(smoke0), smoke5 = sum(smoke5), 
+            smoke10 = sum(smoke10), smoke15 = sum(smoke15))
+
+# read in county shapefile and subset to only colorado fips
+co_county_sf <- st_read("../data/shapefile/us_county", 
+                        layer = "us_county") %>%
+  # limit to colorado
+  filter(STATEFP == "08") %>% 
+  # create fips variable
+  mutate(fips = paste0(STATEFP, COUNTYFP)) %>% 
+  # join with smoke counts
+  left_join(smoke_count, by = "fips")  
+
+# read in colorado roads shapefile
+i25 <- st_read("../data/shapefile/tl_2015_08_prisecroads",
+                    layer = "tl_2015_08_prisecroads") %>% 
+  # filter to I25 lines
+  filter(FULLNAME == "I- 25")
+```
+
+Mapping number of smoke days where GWR PM~2.5~ > 10 ug/m^3^. I've included I-25 as a reference marker as I may have to subset to counties that are along the I-25 corridor.
+
+```{r smoke map}
+ggplot(co_county_sf) +
+  geom_sf(aes(fill = smoke10), color = "#89216b") +
+  scale_fill_gradient("Smoke Days", low="white", high="#da4453") +
+  geom_sf(data = i25, aes(color = "I-25"), 
+          show.legend = "line") +
+  scale_color_manual("Road", values ="#3c1053") +
+  theme_minimal()
+```
+
+Jeff says that the GWR models are heavily weighted on kriging values, which he thinks don't perform well except along the I-25 corridor so I'm going to subset to counties along the corridor. This will also make my small multiples plots easier to read. Note, the furthest south I go is Pueblo county as the two other counties in the south are not very populated.
+
+```{r frontrange_subset}
+# county subset
+county_sub_name <- c("Larimer", "Weld", "Boulder", "Broomfield", "Adams", 
+                "Denver", "Jefferson", "Arapahoe", "Douglas", "El Paso",
+                "Pueblo")
+
+county_sub_fips <- co_county_sf %>% 
+  filter(NAME %in% county_sub_name) %>% 
+  select(NAME, fips) %>% 
+  rename(county = NAME)
+# remove geometry
+st_geometry(county_sub_fips) <- NULL
+
+# subset co_pm to frontrange fips
+co_pm_frontrange <- co_pm %>% 
+  filter(fips %in% county_sub_fips$fips) %>% 
+  left_join(county_sub_fips, by = "fips")
+```
+
+Small-multiples plot of county-specific GWR PM~2.5~ estimates from June 1^st^ to September 30^th^ 2015. 
+
+```{r gwr_plot}
+ggplot(co_pm_frontrange, aes(x=date, y = gwr)) +
+  geom_point() +
+  facet_wrap(~as.factor(county)) +
+  ggtitle("County GWR PM2.5 June through September") +
+  theme_minimal()
+```
+
+Looks like there were a couple notable smoke events at the start of July and again in the middle of August.
+
+## Association: Smoke PM~2.5~ and Mortality
+
+Joining PM~2.5~ time series with mortality time series.
+
+```{r join_pm_mort}
+# subset colorado poulation to 2015
+co_pop_15 <- co_pop %>% 
+  select(fips, county, pop2015)
+
+# join timeseries of pm with timeseries of mortality
+co_ts <- co_mortality %>% 
+  filter(date >= "2015-06-01" & date <= "2015-09-30") %>% 
+  # join smoke values
+  left_join(co_pm, by = c("fips", "date")) %>% 
+  # join county denom
+  left_join(co_pop_15, by = "fips") %>% 
+  # create weekendvariable
+  mutate(day = as.factor(weekdays(date)),
+         weekend = ifelse(day %in% c("Saturday", "Sunday"), 1, 0),
+         gwr_smk10 = gwr_smk/10,
+         krig_smk10 = krig_smk/10) 
+```
+
+```{r lme4}
+# loading lme4 mixed model package
+library(lme4)
+```
+
+Running a Poisson random effects model. Regressing all-cause mortality on GWR smoke by 10 ug/m^3^. In addition to treating each county as a random effect, I've also adjusted for weekend and included a population offset.
+
+```{r all_cause_mod}
+mod <- glmer(all_cause ~ gwr_smk10 + weekend + 
+                (1|fips) + offset(log(pop2015)),
+           family = "poisson"(link="log"), 
+           data = co_ts)
+```
+
+Summary of all-cause model.
+
+```{r all_cause_mod_sum}
+summary(mod)
+```
+
+I'd conclude there is no association between increasing PM~2.5~ attributed to wildfire smoke and all-cause mortality with this model. This model includes counties for the entire state.
+
+### Subset
+
+As stated earlier, counties outside the front range may not have accurate estimates of smoke. Subsetting to these counties on the front range.
+
+```{r subset_ts}
+co_frontrange_ts <- co_ts %>% 
+  # filter to frontrange fips
+  filter(fips %in% county_sub_fips$fips) 
+```
+
+Running same model on subset.
+
+```{r subset_mod}
+mod <- glmer(all_cause ~ gwr_smk10 + weekend + 
+                (1|fips) + offset(log(pop2015)),
+           family = "poisson"(link="log"), 
+           data = co_frontrange_ts)
+```
+
+Summary of model on subset.
+
+```{r subset_mod_sum}
+summary(mod)
+```
+
+This beta estimate is similar to the estimate for the entire state. Also suggests no association.
+
+## Distributed Lag
+
+```{r}
+
+```
 
