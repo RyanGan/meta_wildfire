@@ -397,7 +397,117 @@ This beta estimate is similar to the estimate for the entire state. Also suggest
 
 ## Distributed Lag
 
-```{r}
+I am going to use a distributed lag model to assess a lagged effect between smoke exposure and mortality. 
 
+### Exposure Matrix
+
+First step is set up a lagged PM~2.5~ data frame/matrix.
+
+```{r lagged_pm}
+# general code to create lagged variables
+# may be worth creating in a function one day
+gwr_lag <- co_pm %>% 
+  select(fips, date, gwr_smk) %>% 
+  arrange(fips, date) %>% 
+  group_by(fips) %>% 
+  mutate(gwr_smk10 = gwr_smk/10,
+         gwr_smk_lag1 = lag(gwr_smk10, 1, order_by = fips),
+         gwr_smk_lag2 = lag(gwr_smk10, 2, order_by = fips),
+         gwr_smk_lag3 = lag(gwr_smk10, 3, order_by = fips),
+         gwr_smk_lag4 = lag(gwr_smk10, 4, order_by = fips),         
+         gwr_smk_lag5 = lag(gwr_smk10, 5, order_by = fips),
+         gwr_smk_lag6 = lag(gwr_smk10, 6, order_by = fips)) %>% 
+  select(-gwr_smk)
+
+# join with mortality data
+co_ts_lag <- co_mortality %>% 
+  left_join(gwr_lag, by = c("fips", "date")) %>% 
+  filter(complete.cases(.)) %>% 
+  left_join(co_pop_15, by = "fips") 
 ```
 
+Now that the lagged exposure is set up and joined to the outcome counts, we need to build the basis based on the lagged exposure values. First thing to do is load the package "splines".
+
+```{r library_splines}
+library(splines)
+```
+
+Create PM~2.5~ matrix based on the lag exposure, and apply a natural spline "ns" over the 7 days. I've assigned degrees of freedom as 4. I generally find 3 to 5 works fine, and the shape doesn't really change. 
+
+```{r basis}
+# output matrix of smoke and lag variables
+smk_matrix <- as.matrix(co_ts_lag[, 10:16])
+
+# define basis b using natural spline function
+b <- ns(0:6, df = 4, intercept = T)
+
+# multiply lagged pm matrix by basis
+pm_b <- smk_matrix %*% b
+```
+
+We can now model our outcome on the PM~2.5~ basis in a random-effects Poisson model, adjusting for covariates.
+
+```{r basis_model}
+# fit mixed model
+mod <- glmer(all_cause ~  pm_b + (1|fips) + offset(log(pop2015)),
+             co_ts_lag, family="poisson"(link="log"), 
+             control = glmerControl(optimizer = "bobyqa"))
+```
+
+I find it hard to understand the summary estimates, but the AIC can be used to compare spline degrees of freedom fits.
+
+```{r extracting summary estimates}
+summary(mod)
+# check AIC
+AIC(mod)
+```
+
+Using the basis estimates, we can estimate the cumulative effect over the 7 days and also the daily effect.
+
+```{r dl_estimates}
+# output distributed lag beta parameters
+dlparms <- mod@beta[2:5]
+# estimate distributed lag values for each day
+dl_estimates <- data.frame(estimate = b %*% dlparms)
+
+# covariance matrix for knots (need to convert to matrix object)
+cov_mat <- as.matrix(vcov(mod)[2:5,2:5]) 
+
+# estimate variance of splines
+dl_var <- b%*%cov_mat%*%t(b)
+
+# calculate standard error for each lag value
+dl_estimates$stderr <- sqrt(diag(dl_var))
+
+# calculate lower and upper bounds
+dl_estimates$lower_bound <- dl_estimates$estimate+dl_estimates$stderr*qt(1-0.975,
+  df=df.residual(mod))  
+dl_estimates$upper_bound <- dl_estimates$estimate+dl_estimates$stderr*qt(0.975,
+  df=df.residual(mod))  
+
+
+# estimate relative risk and 95%CI from beta
+dl_rr <- dl_estimates %>% 
+  mutate(estimate = exp(estimate),
+         lower_bound = exp(lower_bound),
+         upper_bound = exp(upper_bound),
+         lag = 0:6)
+
+# estimate cumulative effect
+cumulative <- sum(dl_estimates$estimate)
+cumulative
+
+# estimate cumulative effect stnd error
+cumulative_se <- sqrt(sum(dl_var))
+cumulative_se
+
+# estimate cumulative CI
+cumulative_ci <- cumulative+cumulative_se*qt(c(1-0.975,0.975), 
+                                             df=df.residual(mod))
+cumulative_ci
+
+exp(cumulative)
+exp(cumulative_ci)
+```
+
+This is the general idea. I will return to add some convience code for Rish.
