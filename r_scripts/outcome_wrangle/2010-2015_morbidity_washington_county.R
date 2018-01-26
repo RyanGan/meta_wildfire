@@ -5,9 +5,6 @@
 # Date Created: 2018-01-25
 # ------------------------------------------------------------------------------
 
-# Note: I will think about running this in parallel on the server, but right 
-# now I'm going to work through the 2011 CHARS inpatient and outpatient data
-
 # libraries ----
 # loading tidyverse
 library(tidyverse)
