@@ -81,6 +81,18 @@ mi_vector <- c("41000", "41001", "41002", "41010", "41011", "41012", "41020",
                "41070", "41071", "41072", "41080", "41081", "41082", "41090",
                "41091", "41092")
 
+# bind outcomes in a list and save as an R object for other states
+
+icd9_outcomes <- list(resp_vector, asthma_vector, copd_vector, 
+  acute_bronch_vector, pneumonia_vector, cvd_vector, arrhythmia_vector,
+  ihd_vector, mi_vector, hf_vector, cereb_vector)
+
+# assign names
+names(icd9_outcomes) <- c("resp", "asthma", "copd", "acute_bronch", "pneumonia",
+                          "cvd", "arrhythmia", "ihd", "mi", "hf", "cereb_vas")
+
+save(icd9_outcomes, file = "./data/health/icd9_outcome_vectors.RData")
+
 # creation of county key -----
 COUNTYRES <- c(paste0("0", 1:9), as.character(10:39))
 # county name
