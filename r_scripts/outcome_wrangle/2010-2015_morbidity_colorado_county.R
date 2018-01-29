@@ -74,10 +74,10 @@ co_ed <- co_hosp %>%
       
       # sex strata
       co_sex_ts <- co_ed %>% 
-        group_by(date, fips, SEX) %>% 
+        group_by(date, fips, sex_factor) %>% 
         summarise_at(vars(resp:mi), funs(sum(.))) %>% 
         mutate(cardiopulm_n = resp+cvd) %>% 
-        rename(strata = SEX) %>% 
+        rename(strata = sex_factor) %>% 
         arrange(date, fips)
       
       # rowbind all timeseries together
@@ -104,9 +104,11 @@ date_fips <- expand.grid(date_seq, fips, strata_seq) %>%
     # join to counties and dates missing counts
     full_join(date_fips, by = c("date", "fips", "strata")) %>% 
     # set missing values to 0
-    mutate_at(vars(resp:cardiopulm_n), funs(if_else(is.na(.),0, .)))
+    mutate_at(vars(resp:cardiopulm_n), funs(if_else(is.na(.),0, .))) %>% 
+    filter(!is.na(strata))
 
 summary(colorado_timeseries)  
+summary(as.factor(colorado_timeseries$strata))
 
 # write timeseries csv file ----
 # write path
