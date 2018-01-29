@@ -6,4 +6,55 @@ editor_options:
   chunk_output_type: inline
 ---
 
+## Introduction
 
+This notebook contains code and methods to evaluate the association between wildfire smoke and inpatient via emergency room morbidity. I will be using daily county-level counts of cardiopulmonary emergency room visits that resulted in a hospital inpatient admission as my primary outcome.
+
+### Set up
+
+Setting up knitr chunk options.
+
+```{r kniter_opt}
+knitr::opts_chunk$set(fig.height = 6, fig.width = 8, fig.align = "center")
+```
+
+Loading the tidyverse package, which contains most packages I will need for data cleaning, visualizations, and analysis. Loading stringr package for character string manipulation.
+
+```{r packages}
+library(tidyverse)
+library(stringr)
+```
+
+### Data Import
+
+Importing the Colorado and Washington state inpatient emergency department visits.
+
+#### Note 2018-01-29: 
+Consider adding all inpatient visits as well for all these states. Would this be a general question of hospital utilization?
+
+Importing Colorado 2010 to 2015 time series and viewing first observations.
+
+```{r colorado_import}
+# define relative path to data folder
+co_path <- paste0("../../data/health/2010-2015_morbidity_co_ts.csv")
+# read in dataframe using read_csv function from tidyverse package
+co_ts <- read_csv(co_path) 
+# glimpse first observations
+glimpse(co_ts)
+```
+
+Importing Washington 2011 to 2015 time series and viewing first observations.
+
+```{r washington_import}
+# define relative path
+wa_path <- paste0("../../data/health/2011-2015_morbidity_wa_ts.csv")
+# read in dataframe
+wa_ts <- read_csv(wa_path) %>% 
+  mutate(fips = as.character(fips))
+# glimpse first obs
+glimpse(wa_ts)
+```
+
+Spot for Oregon import.
+
+Importing population county counts.
