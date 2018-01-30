@@ -1,12 +1,14 @@
 ---
-title: "Wildfire Smoke and Mortality "
-author: Ryan Gan
-output: html_notebook
-editor_options: 
-  chunk_output_type: inline
+title: 'Wildfire Smoke and Mortality '
+author: "Ryan Gan"
+output:
+  html_document:
+    df_print: paged
+editor_options:
+  chunk_output_type: console
 ---
 
-## Introduction
+# Introduction
 
 This notebook contains code and methods to evaluate the association between wildfire smoke and inpatient via emergency room morbidity. I will be using daily county-level counts of cardiopulmonary emergency room visits that resulted in a hospital inpatient admission as my primary outcome.
 
@@ -15,17 +17,38 @@ This notebook contains code and methods to evaluate the association between wild
 Setting up knitr chunk options.
 
 ```{r kniter_opt}
-knitr::opts_chunk$set(fig.height = 6, fig.width = 8, fig.align = "center")
+knitr::opts_chunk$set(fig.height = 6, fig.width = 8, fig.align = "center",
+                      progress = F)
 ```
 
 Loading the tidyverse package, which contains most packages I will need for data cleaning, visualizations, and analysis. Loading stringr package for character string manipulation.
 
 ```{r packages}
-library(tidyverse)
-library(stringr)
+library(tidyverse) # all-purpose packages
+library(stringr) # working with character strings
+library(sf) # spatial package
 ```
 
-### Data Import
+Setting up dark plot color theme.
+
+```{r ggtheme}
+ryan_theme <- theme(panel.background = element_rect(fill = "black", 
+          colour = "black", size = 0.5, linetype = "solid"),
+        panel.grid.major = element_line(size = 0.2, colour = "white"),
+        panel.grid.minor = element_line(size = 0.1, color = "white", 
+                                        linetype = "dotted"),
+        plot.background = element_rect(fill = "#141e30", colour="#141e30",
+                                       size = 0.5, linetype = "solid"),
+        text = element_text(colour = "white"),
+        axis.text = element_text(colour = "white"),
+        strip.background = element_blank(),
+        strip.text = element_text(colour="white"),
+        legend.background = element_blank(),
+        legend.key = element_blank())
+```
+
+
+## Data Import
 
 Importing the Colorado and Washington state inpatient emergency department visits.
 
@@ -57,4 +80,334 @@ glimpse(wa_ts)
 
 Spot for Oregon import.
 
-Importing population county counts.
+Importing Census denominator data. Using total population for now, but I may have Jingyang estimate sex and age strata denominators for these counties/years.
+
+```{r read_denom}
+# colorado census
+co_denom <- read_csv("../../data/census/2016-colorado_population.csv") %>% 
+  select(GEO.id2, 'GEO.display-label', respop72010:respop72016) %>% 
+  rename(fips = GEO.id2, county = 'GEO.display-label') %>% 
+  rename_at(vars(respop72010:respop72016), 
+            funs(paste0("pop",str_sub(., start=8)))) %>% 
+  # take out state name and "county" from county name
+  mutate(county = str_split_fixed(county, " County", n=2)[,1])
+# sum up counties to get a state total
+co_denom_total <- co_denom %>% 
+  summarise_at(vars(pop2010:pop2016), sum) %>% 
+  gather(key="year", value = "pop", pop2010:pop2016) %>% 
+  mutate(year = as.numeric(str_sub(year, start = 4)))
+
+# washington cesus
+wa_denom <- read_csv("../../data/census/2016-washington_population.csv") %>% 
+  select(GEO.id2, 'GEO.display-label', respop72010:respop72016) %>% 
+  rename(fips = GEO.id2, county = 'GEO.display-label') %>% 
+  rename_at(vars(respop72010:respop72016), 
+            funs(paste0("pop",str_sub(., start=8)))) %>% 
+  # take out state name and "county" from county name
+  mutate(county = str_split_fixed(county, " County", n=2)[,1])
+# sum up counties to get a state total
+wa_denom_total <- wa_denom %>% 
+  summarise_at(vars(pop2010:pop2016), sum) %>% 
+  gather(key="year", value = "pop", pop2010:pop2016) %>% 
+  mutate(year = as.numeric(str_sub(year, start = 4)))
+```
+
+Viewing Colorado and Washington population totals over time.
+
+```{r pop_plot}
+# bind population denoms together
+pop_totals <- bind_rows(mutate(co_denom_total, state = "colorado"),
+                        mutate(wa_denom_total, state = "washington"))
+
+# plot
+ggplot(data = pop_totals, aes(x=year, y=pop, color = state)) +
+  geom_point() +
+  ylim(4000000, 8000000) +
+  ylab("Popuulation") +
+  xlab("Year") +
+  ggtitle("State population by year") +
+  ryan_theme
+```
+
+Washington has about 2 million more peoplel residing in the state compared to Colorado. Both states have a similar rate of population growth over the 7 year period. We could possibly account for this rate in the denominator.
+
+## Inpatient emergency room time series
+
+I'm limiting to only total admissions strata and taking the sum across all counties for state sums and gathering specific outcome counts from columns to rows so that I can plot small multiples. I've then joined in the state yearly rate by the year in which I have counts for. 
+```{r state_aggregate}
+# aggregate colorado
+co_aggregate <- co_ts %>% 
+  filter(strata =="total") %>% 
+  group_by(date) %>%
+  summarise_at(vars(resp:cardiopulm_n), sum) %>% 
+  gather(key ="outcome", value = "n", resp:cardiopulm_n) %>% 
+  mutate(year = lubridate::year(date)) %>% 
+  left_join(co_denom_total, by = "year") %>% 
+  mutate(rate1mil = (n/pop)*1000000)
+
+# aggregate washington
+wa_aggregate <- wa_ts %>% 
+  filter(strata == "total") %>% 
+  group_by(date) %>% 
+  summarise_at(vars(resp:cardiopulm_n), sum) %>% 
+  gather(key ="outcome", value = "n", resp:cardiopulm_n) %>% 
+  mutate(year = lubridate::year(date)) %>% 
+  left_join(wa_denom_total, by = "year") %>% 
+  mutate(rate1mil = (n/pop)*1000000)
+```
+
+I'm going to plot the state time serieis of rates by outcome, but I am first going to divide up by respiratory outcomes and then cardiovascular outcomes and compare state to state.
+
+#### Respiratory 
+
+Subsetting respiratory outcomes for both Colorado and Washington and combining in to one data frame.
+
+```{r resp_dataframe}
+# colorado respiratory
+co_resp <- co_aggregate %>% 
+  filter(outcome %in% c("resp", "asthma", "copd", 
+                        "acute_bronch", "pneum")) %>% 
+  mutate(state = "colorado")
+# washington respiratory
+wa_resp <- wa_aggregate %>% 
+  filter(outcome %in% c("resp", "asthma", "copd", 
+                        "acute_bronch", "pneum")) %>% 
+  mutate(state = "washington")
+
+# bind datasets together and set order of factors
+resp_ts <- bind_rows(co_resp, wa_resp) %>% 
+  mutate(outcome_group = as.factor(paste(str_sub(state, 1, 2), 
+                                         outcome, sep = "_")),
+    outcome_group = forcats::fct_relevel(outcome_group, 
+    "co_resp", "co_asthma", "co_copd",
+    "co_acute_bronch", "co_pneum", 
+    "wa_resp", "wa_asthma", "wa_copd",
+    "wa_acute_bronch", "wa_pneum"))
+```
+
+Plot of state respiratory outcomes.
+
+```{r state_resp_plot} 
+ggplot(resp_ts, aes(x=date,y=rate1mil)) +
+  geom_point(color = "#00dbde", size = 0.1) +
+  facet_wrap(~outcome_group, nrow = 2) +
+  scale_x_date(date_labels = "'%y") +
+  ylab("Rate per 1 million") +
+  xlab("Date") +
+  ggtitle("Respiratory outcome rate from 2010 to 2016") +
+  ryan_theme
+```
+
+The overall respiratory emergency room hospitalization rate per million persons looks similar between Colorado and Washington (note Washington does not have 2010 data). Colorado's overall respiratory rate may fluctuate slightly more though. For both states, around New Years, I see noticable drops in the rate, which may suggestion needing to account for this in models.
+
+##### 2015 Respiratory Trends
+
+Limiting time series plot to 2015-06-01 to 2015-09-30 to look at cardiovascular trends during the same period for which I have PM~2.5~ data from.
+
+As of right now, I only have smoke exposure estimates from the summer of 2015. I'm going to limit the outcome time serieis to only 2015 to evaluate trends. Also, note that both states did not provide 2015 data after October 2015. This is when ICD-9 switched to ICD-10; those are seperate data sets. I was fine not receiving these data sets for the time being.
+
+I'm also allowing the y-axis scales to vary to see if there is variability over time for the sub outcomes.
+
+```{r resp_plot_2015}
+resp15 <- resp_ts %>% 
+  filter(date >= "2015-06-01" & date <= "2015-09-30")
+# plot
+ggplot(resp15, aes(x=date,y=rate1mil)) +
+  geom_point(color = "#00dbde", size = 0.5) +
+  facet_wrap(~outcome_group, nrow = 2, scales = "free_y") +
+  ylab("Rate per 1 million") +
+  xlab("2015") +
+  ggtitle("Respiratory outcome rate 2015") +
+  ryan_theme
+```
+
+Come back and add some horizontal lines to indicate major smoke events. May be something with Asthma for both states, but that's also the period when the rates start to increase.
+
+#### Cardiovascular
+
+Subsetting cardiovascular outcomes for both Colorado and Washington and combining in to one data frame.
+
+```{r cvd_dataframe}
+summary(as.factor(co_aggregate$outcome))
+# colorado respiratory
+co_cvd <- co_aggregate %>% 
+  filter(outcome %in% c("cvd", "arrhythmia", "ihd", 
+                        "mi", "hf", "cereb_vas")) %>% 
+  mutate(state = "colorado")
+# washington respiratory
+wa_cvd <- wa_aggregate %>% 
+  filter(outcome %in% c("cvd", "arrhythmia", "ihd", 
+                        "mi", "hf", "cereb_vas")) %>% 
+  mutate(state = "washington")
+
+# bind datasets together and set order of factors
+cvd_ts <- bind_rows(co_cvd, wa_cvd) %>% 
+  mutate(outcome_group = as.factor(paste(str_sub(state, 1, 2), 
+                                         outcome, sep = "_")),
+    outcome_group = forcats::fct_relevel(outcome_group, 
+    "co_cvd", "co_arrhythmia", "co_ihd", "co_mi", "co_hf", "co_cereb_vas", 
+    "wa_cvd", "wa_arrhythmia", "wa_ihd", "wa_mi", "wa_hf", "wa_cereb_vas"))
+```
+
+Plot of CVD rate for Colorado and Washington.
+
+```{r state_cvd_plot} 
+ggplot(cvd_ts, aes(x=date,y=rate1mil)) +
+  geom_point(color = "#e100ff", size = 0.1) +
+  facet_wrap(~outcome_group, nrow = 2) +
+  scale_x_date(date_labels = "'%y") +
+  ylab("Rate per 1 million") +
+  xlab("Date") +
+  ggtitle("CVD outcome rate from 2010 to 2016") +
+  ryan_theme
+```
+
+Overall, the rate for cardiovascular outcomes does not exhibit the same seasonal trends as respiratory outcomes, and remains relatively stable over the period. The rate looks almost 50% higher for Washington; I'm not sure if this might be a true trend or if it's more of an artifact of differences in the discharge data sets provided by the states.
+
+##### 2015 Cardiovascular Trends
+
+Limiting time series plot to 2015-06-01 to 2015-09-30 to look at cardiovascular trends during the same period for which I have PM~2.5~ data from.
+
+```{r cvd_plot_2015}
+cvd15 <- cvd_ts %>% 
+  filter(date >= "2015-06-01" & date <= "2015-09-30")
+# plot
+ggplot(cvd15, aes(x=date,y=rate1mil)) +
+  geom_point(color = "#e100ff", size = 0.5) +
+  facet_wrap(~outcome_group, nrow = 2, scales = "free_y") +
+  ylab("Rate per 1 million") +
+  xlab("2015") +
+  ggtitle("Cardiovascular outcome rate 2015") +
+  ryan_theme
+```
+
+One trend that kind of sticks out is that the rate of heart failure admissions in Washington is noticeably higher compared to Colorado, and there might be a slight decrease in the rate over time. Also, I've noticed that near the end of time series (October), there ia systematic dip in all time serieis. This could be a reporting/quality assurance issue, or perhaps some hospitals had begun to transition to ICD-10 coding. In any case, it may be worth chopping off the last couple dates in September.
+
+## PM~2.5~
+
+Reading in PM~2.5~ data estimated using kriging and geographically-weighted ridge regression (GWR).
+
+```{r pm_import}
+# read pm data and subset to colorado
+pm_path <- paste0("./data/smoke/2015-smoke_wus_county_popwt.csv")
+# read pm
+pm <- read_csv(pm_path) %>% 
+  mutate(smoke0 = ifelse(gwr_smk > 0, 1, 0),
+         smoke5 = ifelse(gwr_smk > 5, 1, 0),
+         smoke10 = ifelse(gwr_smk > 10, 1, 0),
+         smoke15 = ifelse(gwr_smk > 15, 1, 0))
+
+glimpse(pm)
+```
+
+Note, I didn't create a smoke-wave binary variable because the 98^th^ percentile with this reduced time series is skewed (36 ug/m^3^).
+
+#### Smoke Map
+
+First thing I am going to do is look at the spatial resolution of smoke using counts of number of smoke days by county with a map. I will use the "sf" package, which works with tidyverse. However, "sf" requires the latest version of R and also requires the development version of ggplot.
+
+Counting up smoke days using the > 10 ug/m^3^ cutoff for GWR smoke in each county.
+
+```{r smoke_count}
+# count up smoke events for each county
+smoke_count <- pm %>% 
+  group_by(fips) %>% 
+  summarise(smoke0 = sum(smoke0), smoke5 = sum(smoke5), 
+            smoke10 = sum(smoke10), smoke15 = sum(smoke15))
+
+# read in county shapefile and subset to only colorado fips
+county_sf <- st_read("./data/shapefile/us_county", 
+                        layer = "us_county") %>% 
+  # create fips variable
+  mutate(fips = paste0(STATEFP, COUNTYFP)) %>% 
+  # filter to counties in western US states
+  filter(fips %in% unique(pm$fips)) %>% 
+  # join with smoke counts
+  left_join(smoke_count, by = "fips")  
+
+# extract projection
+wgs84 <- st_crs(county_sf)
+
+# read state lines sf file
+state_sf <- st_read("./data/shapefile/us_state", 
+                    layer = "cb_2016_us_state_20m") %>% 
+  filter(STATEFP %in% county_sf$STATEFP) %>% 
+  # assign wgs84 projection
+  st_transform(wgs84) 
+```
+
+Mapping number of smoke days where GWR PM~2.5~ > 10 ug/m^3^.
+
+```{r smoke map}
+ggplot(county_sf) +
+  geom_sf(aes(fill = smoke10), color = "#53346d") +
+  scale_fill_gradient("Smoke Days", low="white", high="#ff00cc") +
+  geom_sf(data = state_sf, color = "#7303c0", alpha = 0) +
+  ryan_theme
+```
+
+It looks like most of the smoke impacted the Eastern part of Washington, Idaho,
+Montana, and parts of Souther Oregon and Northern California. Some impact in Wyoming and Colorado.
+
+#### PM~2.5~ Time series plots
+
+I'm going to summarize time series of PM~2.5~ by state for now. I'll look for regional boundary maps to help divide up the states a bit. Educational regions is an option.
+
+Could also use a plotly type map to allow for more interaction. I'll consider this if it would be useful.
+Link to plotly example:
+https://blog.cpsievert.me/2018/01/30/learning-improving-ggplotly-geom-sf/
+
+Wrangling data in order to plot by state. First section of code is finding the median of the background estimates. Second part is preparing Colorado and Washington PM~2.5~ values for plotting.
+
+```{r pm_aggregate}
+# find the median pm of background for each state
+state_background <- pm %>% 
+  filter(str_sub(fips, 1,2) %in% c("08", "53")) %>% 
+  mutate(state = if_else(str_sub(fips,1,2)=="08", "co", "wa")) %>% 
+  group_by(state) %>% 
+  summarise(median_pm = median(background_med))
+
+# subset to only washington and colorado
+pm_aggregate <- pm %>% 
+  filter(str_sub(fips, 1,2) %in% c("08", "53")) %>% 
+  mutate(state = if_else(str_sub(fips,1,2)=="08", "co", "wa")) %>% 
+  select(-(smoke0:smoke_wave), -gwr_smk, -krig_smk, -background_med) %>% 
+  gather(key = "method", value = "pm", gwr, krig) %>% 
+  mutate(state_method = paste(state, method, sep = "_"))
+```
+
+Plotting time series of county values of PM~2.5~ for each state and method from 2015-06-01 to 2015-09-30. I've added in the background levels (red line).
+
+```{r pm_plot}
+ggplot(pm_aggregate, aes(x=date, y=pm, group=fips)) +
+  geom_line(colour = "#93f9b9") +
+  geom_hline(data=state_background, aes(yintercept = median_pm), 
+             colour = "red")+
+  facet_wrap(~state_method) +
+  ylab("PM2.5 ug/m^3") +
+  xlab("2015") +
+  ggtitle("PM2.5 for each county by state and estimation method") +
+  ryan_theme
+```
+
+Looks like there were a couple notable smoke events at the start of July and again in the middle of August in Colorado. I believe this smoke was transported from the Pacific Northwest fires as there weren't any large fires in Colorado during this time. Washington has notably higher PM~2.5~ values in late August; also has more period impacted by smoke (early July, early August, late August).
+
+## Association between PM~2.5~ and Morbidity
+
+Now that I've looked at the time series of the emergency room hospitalizations and PM~2.5~, I'll see if there is any association between two.
+
+```{r morbidity_pm_df}
+  filter(date >= "2015-06-01" & date <= "2015-09-30") %>% 
+  # join smoke values
+  left_join(co_pm, by = c("fips", "date")) %>% 
+  # join county denom
+  left_join(co_pop_15, by = "fips") %>% 
+  # create weekendvariable
+  mutate(day = as.factor(weekdays(date)),
+         weekend = ifelse(day %in% c("Saturday", "Sunday"), 1, 0),
+         gwr_smk10 = gwr_smk/10,
+         krig_smk10 = krig_smk/10) 
+```
+
+
+

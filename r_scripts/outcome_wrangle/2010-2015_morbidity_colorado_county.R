@@ -33,7 +33,7 @@ names(icd9_outcomes)
 # I think I'll summarise up inpatients admitted from ER; should be similar to 
 # what I did for CHARS
 co_ed <- co_hosp %>%
-  filter(ADMSNO == 7) %>% 
+  filter(ADMTNO == 1) %>% # subset to ADMTNO == 1 Emergency
   mutate(date = as.Date(admit, format = "%m/%d/%Y"),
     resp = if_else(dx1 %in% icd9_outcomes$resp, 1, 0),
     asthma = if_else(dx1 %in% icd9_outcomes$asthma, 1, 0),
@@ -54,14 +54,14 @@ co_ed <- co_hosp %>%
                         AGEYRS >= 65 ~ "age_over_65"),
     fips = paste0("08", county_final))
 
-      # time series ----
+# time series ----
       # total counts
       co_total_ts <- co_ed %>% 
         group_by(date, fips) %>% 
         summarise_at(vars(resp:mi), funs(sum(.))) %>% 
         mutate(cardiopulm_n = resp+cvd,
                strata = "total") %>% 
-        select(date, fips, strata, resp:cardiopulm_n) %>% 
+        select(date, strata, fips, resp:cardiopulm_n) %>% 
         arrange(date, fips)
 
       # age strata
