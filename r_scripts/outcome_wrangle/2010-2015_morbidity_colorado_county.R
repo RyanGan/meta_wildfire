@@ -90,14 +90,14 @@ strata_seq <- c("total", "age_15_to_65", "age_over_65", "age_under_15",
 date_seq <- as.character(seq.Date(as.Date("2010-01-01"), as.Date("2015-09-27"), 
                                         by = "day"))
 
-fips <- unique(co_ts$fips)
+fips <- unique(co_ts$fips)[!is.na(unique(co_ts$fips))]
 
 # expand grid
 date_fips <- expand.grid(date_seq, fips, strata_seq) %>% 
         rename(date = Var1, fips = Var2, strata = Var3) %>% 
         mutate(date = as.Date(date), fips = as.character(fips), 
                strata = as.character(strata))
-      
+
 # create time series dataframe -----
   # fead in years list to purrr map function
   colorado_timeseries <- co_ts %>% 
@@ -109,7 +109,7 @@ date_fips <- expand.grid(date_seq, fips, strata_seq) %>%
 
 summary(colorado_timeseries)  
 summary(as.factor(colorado_timeseries$strata))
-
+summary(as.factor(colorado_timeseries$fips))
 # write timeseries csv file ----
 # write path
 write_path <- paste0("./data/health/2010-2015_morbidity_co_ts.csv")
