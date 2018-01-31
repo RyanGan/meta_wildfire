@@ -27,6 +27,8 @@ Loading the tidyverse package, which contains most packages I will need for data
 library(tidyverse) # all-purpose packages
 library(stringr) # working with character strings
 library(sf) # spatial package
+library(lme4) # loading lme4 mixed model package
+library(splines) # splines package
 ```
 
 Setting up dark plot color theme.
@@ -383,7 +385,7 @@ state_background <- pm %>%
 pm_aggregate <- pm %>% 
   filter(str_sub(fips, 1,2) %in% c("08", "53")) %>% 
   mutate(state = if_else(str_sub(fips,1,2)=="08", "co", "wa")) %>% 
-  select(-(smoke0:smoke_wave), -gwr_smk, -krig_smk, -background_med) %>% 
+  select(-(smoke0:smoke15), -gwr_smk, -krig_smk, -background_med) %>% 
   gather(key = "method", value = "pm", gwr, krig) %>% 
   mutate(state_method = paste(state, method, sep = "_"))
 ```
@@ -391,9 +393,10 @@ pm_aggregate <- pm %>%
 Plotting time series of county values of PM~2.5~ for each state and method from 2015-06-01 to 2015-09-30. I've added in the background levels (red line).
 
 ```{r pm_plot}
+state_background
 ggplot(pm_aggregate, aes(x=date, y=pm, group=fips)) +
   geom_line(colour = "#93f9b9") +
-  geom_hline(data=state_background, aes(yintercept = median_pm), 
+  geom_hline(aes(yintercept = 4.43), 
              colour = "red")+
   facet_wrap(~state_method) +
   ylab("PM2.5 ug/m^3") +
@@ -425,9 +428,37 @@ ed_ts <- co_ts %>%
     # create pm 10 unit change v ariables
     gwr_smk10 = gwr_smk/10,
     krig_smk10 = krig_smk/10,
-    gwr_10 = gwr/10,
-    kri_10 = krig/10)
+    gwr10 = gwr/10,
+    krig10 = krig/10)
 ```
 
-Univariate
+Univariate association.
+
+```{r lme4}
+
+```
+
+Running a Poisson random effects model. Regressing all-cause mortality on GWR smoke by 10 ug/m^3^. In addition to treating each county as a random effect, I've also adjusted for weekend and included a population offset.
+
+```{r all_cause_mod}
+ggplot(data=ed_ts, aes(x=gwr10, y=(asthma/population))) +
+  geom_point()
+
+wash_subset <- ed_ts %>% 
+  filter(state == "Washington") %>% 
+  filter(date < "2015-09-20")
+
+colo_subset <- ed_ts %>% 
+  filter(state == "Colorado") %>% 
+  filter(date < "2015-09-20")
+
+glimpse(ed_ts)
+
+mod <- glmer(asthma ~ gwr_smk10 +
+                (1|fips) + offset(log(population)),
+           family = "poisson"(link="log"), 
+           data = colo_subset)
+
+summary(mod)
+```
 
