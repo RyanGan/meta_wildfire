@@ -62,7 +62,7 @@ Importing Colorado 2010 to 2015 time series and viewing first observations.
 # define relative path to data folder
 co_path <- paste0("../../data/health/2010-2015_morbidity_co_ts.csv")
 # read in dataframe using read_csv function from tidyverse package
-co_ts <- read_csv(co_path) 
+co_ts <- read_csv(co_path, progress = F) 
 # glimpse first observations
 glimpse(co_ts)
 ```
@@ -73,7 +73,7 @@ Importing Washington 2011 to 2015 time series and viewing first observations.
 # define relative path
 wa_path <- paste0("../../data/health/2011-2015_morbidity_wa_ts.csv")
 # read in dataframe
-wa_ts <- read_csv(wa_path) %>% 
+wa_ts <- read_csv(wa_path, progress = F) %>% 
   mutate(fips = as.character(fips))
 # glimpse first obs
 glimpse(wa_ts)
@@ -132,7 +132,7 @@ ggplot(data = pop_totals, aes(x=year, y=pop, color = state)) +
   ryan_theme
 ```
 
-Washington has about 2 million more peoplel residing in the state compared to Colorado. Both states have a similar rate of population growth over the 7 year period. We could possibly account for this rate in the denominator.
+Washington has about 2 million more people residing in the state compared to Colorado. Both states have a similar rate of population growth over the 7 year period. We could possibly account for this rate in the denominator.
 
 I'm going to prepare the 2015 Washington and Colorado county denominators that will be joined to the analysis data frame later on.
 ```{r county_denom_2015}
@@ -171,7 +171,7 @@ wa_aggregate <- wa_ts %>%
   mutate(rate1mil = (n/pop)*1000000)
 ```
 
-I'm going to plot the state time serieis of rates by outcome, but I am first going to divide up by respiratory outcomes and then cardiovascular outcomes and compare state to state.
+I'm going to plot the state time series of rates by outcome, but I am first going to divide up by respiratory outcomes and then cardiovascular outcomes and compare state to state.
 
 ## Respiratory 
 
@@ -213,13 +213,13 @@ ggplot(resp_ts, aes(x=date,y=rate1mil)) +
   ryan_theme
 ```
 
-The overall respiratory emergency room hospitalization rate per million persons looks similar between Colorado and Washington (note Washington does not have 2010 data). Colorado's overall respiratory rate may fluctuate slightly more though. For both states, around New Years, I see noticable drops in the rate, which may suggestion needing to account for this in models.
+The overall respiratory emergency room hospitalization rate per million persons looks similar between Colorado and Washington (note Washington does not have 2010 data). Colorado's overall respiratory rate may fluctuate slightly more though. For both states, around New Years, I see noticeable drops in the rate, which may suggestion needing to account for this in models.
 
 ### 2015 Respiratory Trends
 
 Limiting time series plot to 2015-06-01 to 2015-09-30 to look at cardiovascular trends during the same period for which I have PM~2.5~ data from.
 
-As of right now, I only have smoke exposure estimates from the summer of 2015. I'm going to limit the outcome time serieis to only 2015 to evaluate trends. Also, note that both states did not provide 2015 data after October 2015. This is when ICD-9 switched to ICD-10; those are seperate data sets. I was fine not receiving these data sets for the time being.
+As of right now, I only have smoke exposure estimates from the summer of 2015. I'm going to limit the outcome time series to only 2015 to evaluate trends. Also, note that both states did not provide 2015 data after October 2015. This is when ICD-9 switched to ICD-10; those are separate data sets. I was fine not receiving these data sets for the time being.
 
 I'm also allowing the y-axis scales to vary to see if there is variability over time for the sub outcomes.
 
@@ -295,7 +295,7 @@ ggplot(cvd15, aes(x=date,y=rate1mil)) +
   ryan_theme
 ```
 
-One trend that kind of sticks out is that the rate of heart failure admissions in Washington is noticeably higher compared to Colorado, and there might be a slight decrease in the rate over time. Also, I've noticed that near the end of time series (October), there ia systematic dip in all time serieis. This could be a reporting/quality assurance issue, or perhaps some hospitals had begun to transition to ICD-10 coding. In any case, it may be worth chopping off the last couple dates in September.
+One trend that kind of sticks out is that the rate of heart failure admissions in Washington is noticeably higher compared to Colorado, and there might be a slight decrease in the rate over time. Also, I've noticed that near the end of time series (October), there is systematic dip in all time series. This could be a reporting/quality assurance issue, or perhaps some hospitals had begun to transition to ICD-10 coding. In any case, it may be worth chopping off the last couple dates in September.
 
 # PM~2.5~
 
@@ -361,7 +361,7 @@ ggplot(county_sf) +
 ```
 
 It looks like most of the smoke impacted the Eastern part of Washington, Idaho,
-Montana, and parts of Souther Oregon and Northern California. Some impact in Wyoming and Colorado.
+Montana, and parts of Southern Oregon and Northern California. Some impact in Wyoming and Colorado.
 
 ## PM~2.5~ Time series plots
 
@@ -425,6 +425,7 @@ ed_ts <- co_ts %>%
   # create weekend variable
   mutate(day = as.factor(weekdays(date)),
     weekend = ifelse(day %in% c("Saturday", "Sunday"), 1, 0),
+    month = as.factor(lubridate::month(date)),
     # create pm 10 unit change v ariables
     gwr_smk10 = gwr_smk/10,
     krig_smk10 = krig_smk/10,
@@ -432,33 +433,439 @@ ed_ts <- co_ts %>%
     krig10 = krig/10)
 ```
 
-Univariate association.
+## Poisson Mixed Model
 
-```{r lme4}
+I'm limiting data analysis to the "total" strata for now. This is the group that makes no distinction about strata.
+
+Running a Poisson random effects model. Regressing cardiopulmonary ED visits on GWR smoke by 10 ug/m^3^. Assuming a linear relationship. In addition to treating each county as a random effect, I've also adjusted for weekend and month to attempt to account for temporal trends. I've also included a population offset.
+
+```{r linear_poisson_mod}
+# limit to total group
+strata_sub_ed <- ed_ts %>% 
+  filter(strata == "total") 
+
+# vector of names of outcomes to regress
+outcomes <- colnames(ed_ts)[4:14]
+# feed vector in to purrr map_dfr and run mixed model on each outcome
+results <- outcomes %>% 
+  map_dfr(function(x) {
+    mod <- glmer(as.formula(paste0(x, 
+        "~gwr_smk10+weekend+month+(1|fips)+offset(log(population))")),
+        family = "poisson"(link="log"), 
+        data = strata_sub_ed, 
+        control = glmerControl(optimizer = "bobyqa"))
+    
+    # broom:tidy the model
+    result <- broom::tidy(mod) %>% 
+      filter(term == "gwr_smk10") %>% 
+      mutate(rr = round(exp(estimate),3),
+             lower95 = round(exp(estimate-(1.96*std.error)),3),
+             upper95 = round(exp(estimate+(1.96*std.error)),3),
+             p = round(p.value,3)) %>% 
+      select(rr:p)
+    
+    outcome <- as_data_frame(as.character(x)) %>% rename(outcome = value)
+    output_result <- bind_cols(outcome, result)
+    return(output_result)
+  }
+) # end map function
+```
+
+Finished running mixed Poisson models. Printing output as a table.
+
+```{r poisson_table}
+knitr::kable(results, caption = paste0("Association between 10 ug/m^3",
+  " increase in smoke PM2.5 and cardiopulmonary outcomes"))
+```
+
+Plotting results in the table.
+
+```{r poisson_plot}
+# preserve factor level and add group variable
+results_plot <- results %>% 
+  mutate(outcome = forcats::fct_relevel(outcome,
+    results$outcome),
+    group = as.factor(if_else(outcome %in% outcomes[1:5], 
+                    "respiratory", "cardiovascular")))
+
+ggplot(data=results_plot, aes(x=outcome, y = rr, colour = group)) +
+  geom_point() +
+  geom_errorbar(aes(ymin=lower95, ymax=upper95), width = 0.3) +
+  scale_color_manual(values = c("#9cecfb", "#ff00cc")) +
+  geom_hline(yintercept = 1, linetype = "dashed", colour = "red") +
+  ylab("Risk Ratio") +
+  xlab("Outcome") +
+  ggtitle(paste0("Association between smoke and ED admissions")) +
+  ryan_theme +
+  theme(panel.grid.major.x = element_blank(),
+        panel.grid.major.y = element_line(linetype = "dotted"),
+        panel.grid.minor = element_blank(),
+        axis.text.x = element_text(angle = 90, hjust=0.95, vjust = 0.75))
+```
+
+Looks like these time series models show no or very weak associations (except maybe COPD). 
+
+### Sensitivity Analyses
+
+Performing some sensitivity tests. When I looked at the emergency room time series, I saw some sharp declines in the counts at the end of September. This could be due to health care systems switching over to ICD-10 before the HHS dead line of October 1, 2015, and therefore the counts based on ICD-9 may not be accurate. This could also be an argument for a case-crossover approach.
+
+I'll try by looking at trends on in August 2015.
+
+```{r august_ts}
+# limit to total group
+strata_sub_ed <- ed_ts %>% 
+  filter(strata == "total") %>% 
+  filter(month == 08)
+
+# vector of names of outcomes to regress
+outcomes <- colnames(ed_ts)[4:14]
+# feed vector in to purrr map_dfr and run mixed model on each outcome
+results <- outcomes %>% 
+  map_dfr(function(x) {
+    mod <- glmer(as.formula(paste0(x, 
+        "~gwr_smk10+weekend+(1|fips)+offset(log(population))")),
+        family = "poisson"(link="log"), 
+        data = strata_sub_ed, 
+        control = glmerControl(optimizer = "bobyqa"))
+    
+    # broom:tidy the model
+    result <- broom::tidy(mod) %>% 
+      filter(term == "gwr_smk10") %>% 
+      mutate(rr = round(exp(estimate),3),
+             lower95 = round(exp(estimate-(1.96*std.error)),3),
+             upper95 = round(exp(estimate+(1.96*std.error)),3),
+             p = round(p.value,3)) %>% 
+      select(rr:p)
+    
+    outcome <- as_data_frame(as.character(x)) %>% rename(outcome = value)
+    output_result <- bind_cols(outcome, result)
+    return(output_result)
+  }
+) # end map function and add some variables
+
+results_plot <- results %>% 
+  mutate(outcome = forcats::fct_relevel(outcome,
+    results$outcome),
+    group = as.factor(if_else(outcome %in% outcomes[1:5], 
+                    "respiratory", "cardiovascular")))
+
+ggplot(data=results_plot, aes(x=outcome, y = rr, colour = group)) +
+  geom_point() +
+  geom_errorbar(aes(ymin=lower95, ymax=upper95), width = 0.3) +
+  scale_color_manual(values = c("#9cecfb", "#ff00cc")) +
+  geom_hline(yintercept = 1, linetype = "dashed", colour = "red") +
+  ylab("Risk Ratio") +
+  xlab("Outcome") +
+  ggtitle(paste0("Sensitivty: August Only")) +
+  ryan_theme +
+  theme(panel.grid.major.x = element_blank(),
+        panel.grid.major.y = element_line(linetype = "dotted"),
+        panel.grid.minor = element_blank(),
+        axis.text.x = element_text(angle = 90, hjust=0.95, vjust = 0.75))
+```
+
+These results are slightly different; signals are slightly stronger and I see a signal with CVD. Although that just says to me that I have some sort of temporal bias or confounding. Maybe makes the argument for trying to fit a spline to PM~2.5~ series.
+
+I'll also check if there may be evidence of some sort of spatial variable by checking results for Spokane county only. I think was impacted by smoke during this time and we can be relatively confident in the exposure estimate.
+
+```{r spokane_ts}
+# limit to total group
+strata_sub_ed <- ed_ts %>% 
+  filter(strata == "total") %>% 
+  filter(fips == "53063")
+
+# vector of names of outcomes to regress
+outcomes <- colnames(ed_ts)[4:14]
+# feed vector in to purrr map_dfr and run mixed model on each outcome
+results <- outcomes %>% 
+  map_dfr(function(x) {
+    mod <- glm(as.formula(paste0(x, 
+        "~gwr_smk10+weekend+month+offset(log(population))")),
+        family = "poisson"(link="log"), 
+        data = strata_sub_ed)
+    
+    # broom:tidy the model
+    result <- broom::tidy(mod) %>% 
+      filter(term == "gwr_smk10") %>% 
+      mutate(rr = round(exp(estimate),3),
+             lower95 = round(exp(estimate-(1.96*std.error)),3),
+             upper95 = round(exp(estimate+(1.96*std.error)),3),
+             p = round(p.value,3)) %>% 
+      select(rr:p)
+    
+    outcome <- as_data_frame(as.character(x)) %>% rename(outcome = value)
+    output_result <- bind_cols(outcome, result)
+    return(output_result)
+  }
+) # end map function and add some variables
+
+results_plot <- results %>% 
+  mutate(outcome = forcats::fct_relevel(outcome,
+    results$outcome),
+    group = as.factor(if_else(outcome %in% outcomes[1:5], 
+                    "respiratory", "cardiovascular"))) %>% 
+  filter(outcome != "acute_bronch")
+
+ggplot(data=results_plot, aes(x=outcome, y = rr, colour = group)) +
+  geom_point() +
+  geom_errorbar(aes(ymin=lower95, ymax=upper95), width = 0.3) +
+  scale_color_manual(values = c("#9cecfb", "#ff00cc")) +
+  geom_hline(yintercept = 1, linetype = "dashed", colour = "red") +
+  ylab("Risk Ratio") +
+  xlab("Outcome") +
+  ggtitle(paste0("Sensitivty: Spokane")) +
+  ryan_theme +
+  theme(panel.grid.major.x = element_blank(),
+        panel.grid.major.y = element_line(linetype = "dotted"),
+        panel.grid.minor = element_blank(),
+        axis.text.x = element_text(angle = 90, hjust=0.95, vjust = 0.75))
+```
+
+There may be some temporal variability as well, but this should be a county that the exposure should be pretty accurate. I think that it may be possible that the signals do reflect that persons in this smokey county may have stayed in doors or took other mitigation strategies. 
+
+Anyways, I think the mixed model with all counties is fine and accounts for this possible temporal variability. It's very possible I need to assess the distributed lag relationship and include a spline or some sort of period function that predicts the exposure series not impacted by smoke. 
+
+## Accounting for Background Exposure
+
+Peng et al. advocates for fitting a spline to the exposure series, and not the outcome series. I found an abstract that found fitting a spline to the outcome series works, but can lead to underestimation of the effect size. Also, fitting a spline to the exposure means I need to fit only one spline rather than many to each exposure.
+
+Insert Peng article reference here.
+
+Prepping data by limiting to total strata and removing any fips missing PM~2.5~ estimates.
+
+```{r spline_data_prep}
+# limit to total group
+total_ed <- ed_ts %>% 
+  filter(strata == "total") %>% 
+  filter(!is.na(gwr))
+```
+
+For this analysis, I'm using the "splines" package to try and fit the general exposure series. I'll have to read over picking degrees of freedom again, but I've tried a couple different degrees of freedom with a natural spline and plotted these predicted values against observed and I think I remember some literature that said anywhere from 7 to 9 might fit pretty well for a year. However, I don't have a full year of PM~2.5~ data. And our data contains estimates due to smoke events, so it's not like a "normal" variation that might be expected in metro areas.  
+
+I've run degrees of freedom from 5 to 13 and plotted small multiples to visualize fit. 
+
+```{r spline_fit}
+# define degrees of freedom
+spl_df <- 5:13
+
+# fit spline by date
+spline_fits <- spl_df %>% 
+  map_dfr(function(df_val){
+    date <- total_ed$date
+    # run spline based on date sequence
+    spl <- ns(date, df = df_val)
+    # model gwr_smoke units regressed on the spline
+    pm_mod <- lm(gwr_smk10 ~ spl, data = total_ed)
+    # estimated predicted values based on the spline and bind with dates
+    pm_pred <- predict(pm_mod, type="response")
+    # rep df val by length of prediction
+    degree_freedom <- rep(df_val, length(pm_pred))
+    # join with total_ed 
+    plot_df <- total_ed %>% 
+      select(date, fips, gwr_smk10) %>% 
+      cbind(pm_pred, degree_freedom)
+  } # end function
+) # end map 
+```
+
+Plotting fits of splines to see how well spline estimates track PM~2.5~ exposure series.
+
+```{r spline_fit_plot}
+ggplot(data = spline_fits, aes(x=date, y=gwr_smk10)) +
+  geom_point(colour = "#24c6dc", size = 0.2) +
+  geom_line(aes(x=date, y=pm_pred), colour = "#ff00cc") +
+  facet_wrap(~degree_freedom) +
+  ggtitle("Spline fit of PM2.5 by degrees of freedom") +
+  xlab("2015") +
+  ylab("GWR Smoke PM2.5 ug/m^3") +
+  ryan_theme
+```
+
+With less degrees of freedom, the spline fit is less pronounced. Even at the higher degrees of freedom, the major smoke event doesn't have much of an influence, but you can see the line influenced slightly. I think I might actually try and fit a spline with 5 degrees of freedom to the following models for a couple reasons. I want to account for the natural variation in the exposure series that may also confound the outcome series. Furthermore, I don't think I actually want to capture the variation of the smoke events as this is what we are interested in. In other words, I think I am trying to account for what would have been a natural pattern if the smoke were not present. This also raises a question about the GWR Smoke variable, which subtracts off the median value over this time. I wonder if that's appropriate? Question to think about.
+
+Fitting univariate model with 7 degrees of freedom spline
+
+```{r results_pm_spline}
+# define pm spline
+pm_spl <- ns(total_ed$date, df = 7)
+
+# vector of names of outcomes to regress
+outcomes <- colnames(total_ed)[4:14]
+# feed vector in to purrr map_dfr and run mixed model on each outcome
+results <- outcomes %>% 
+  map_dfr(function(x) {
+    mod <- glmer(as.formula(paste0(x, 
+        "~gwr_smk10+pm_spl+(1|fips)+offset(log(population))")),
+        family = "poisson"(link="log"), 
+        data = total_ed, 
+        control = glmerControl(optimizer = "bobyqa"))
+    # broom:tidy the model
+    result <- broom::tidy(mod) %>% 
+      filter(term == "gwr_smk10") %>% 
+      mutate(rr = round(exp(estimate),3),
+             lower95 = round(exp(estimate-(1.96*std.error)),3),
+             upper95 = round(exp(estimate+(1.96*std.error)),3),
+             p = round(p.value,3)) %>% 
+      select(rr:p)
+    
+    outcome <- as_data_frame(as.character(x)) %>% rename(outcome = value)
+    output_result <- bind_cols(outcome, result)
+    return(output_result)
+  }
+) # end map function
+```
+
+Plot of GWR smoke association with cardiopulmonary outcomes with a spline fit to PM~2.5~.
+
+```{r spline_plot}
+results_plot <- results %>% 
+  mutate(outcome = forcats::fct_relevel(outcome,
+    results$outcome),
+    group = as.factor(if_else(outcome %in% outcomes[1:6], 
+                    "respiratory", "cardiovascular"))) 
+
+ggplot(data=results_plot, aes(x=outcome, y = rr, colour = group)) +
+  geom_point() +
+  geom_errorbar(aes(ymin=lower95, ymax=upper95), width = 0.3) +
+  scale_color_manual(values = c("#9cecfb", "#ff00cc")) +
+  geom_hline(yintercept = 1, linetype = "dashed", colour = "red") +
+  ylab("Risk Ratio") +
+  xlab("Outcome") +
+  ggtitle(paste0("Association with spline")) +
+  ryan_theme +
+  theme(panel.grid.major.x = element_blank(),
+        panel.grid.major.y = element_line(linetype = "dotted"),
+        panel.grid.minor = element_blank(),
+        axis.text.x = element_text(angle = 90, hjust=0.95, vjust = 0.75))
+```
+
+The spline doesn't really change findings too much. I also played around with different spline degrees of freedom and that can change the results somewhat, but not noticeably so. I could also try periodic type functions like sine/cosine functions.
+
+# Distributed Lag 
+
+I'm going to try and fit a distributed lag model to estimate lagged associations and also cumulative associations over 5 days. I thought about a week, but that would cut off a half month of data.
+
+```{r lag_values}
+# general code to create lagged variables
+# may be worth creating in a function one day
+gwr_lag <- pm %>% 
+  select(fips, date, gwr_smk) %>% 
+  arrange(fips, date) %>% 
+  group_by(fips) %>% 
+  mutate(gwr_smk10 = gwr_smk/10,
+         gwr_smk_lag1 = lag(gwr_smk10, 1, order_by = fips),
+         gwr_smk_lag2 = lag(gwr_smk10, 2, order_by = fips),
+         gwr_smk_lag3 = lag(gwr_smk10, 3, order_by = fips),
+         gwr_smk_lag4 = lag(gwr_smk10, 4, order_by = fips),         
+         gwr_smk_lag5 = lag(gwr_smk10, 5, order_by = fips),
+         gwr_smk_lag6 = lag(gwr_smk10, 6, order_by = fips)) %>% 
+  select(-gwr_smk)
+
+# join with morbidity data
+ed_ts_lag <- total_ed %>%
+  select(-gwr_smk10, -pm_pred) %>% 
+  left_join(gwr_lag, by = c("fips", "date")) %>% 
+  filter(complete.cases(.)) 
+```
+
+Create PM~2.5~ matrix based on the lag exposure, and apply a natural spline "ns" over the 7 days. I've assigned degrees of freedom as 4. I generally find 3 to 5 works fine, and the shape doesn't really change. 
+
+```{r smoke_matrix}
+# output matrix of smoke and lag variables
+smk_matrix <- as.matrix(select(ed_ts_lag, gwr_smk10:gwr_smk_lag6))
+```
+
+Creating distributed lag function that outputs a dataframe of lagged values and cumulative effect over the lag period.
+```{r dl_function}
+pm_spl <- ns(ed_ts_lag$date, df = 7)
+
+distributed_lag <- function(data, exp_mat, outcome, 
+                            lag_df, pm_spline, cumulative=T){
+  # define basis b using natural spline function
+  pm_b <- ns(0:6, df = lag_df, intercept = T)
+  # multiply lagged pm matrix by basis
+  pm_basis <- smk_matrix %*% pm_b
+  # fit mixed model
+  mod <- glmer(as.formula(paste0(outcome, 
+            "~pm_basis + pm_spline + (1|fips)+ offset(log(population))")),
+             ed_ts_lag, family="poisson"(link="log"), 
+             control = glmerControl(optimizer = "bobyqa"))
+
+  # calculate estimates ----
+  # output pm basis parameters
+  dl_parms <- broom::tidy(mod) %>% 
+    filter(stringr::str_detect(term, "pm_basis")) %>% 
+    select(estimate) %>% 
+    as_vector()
+  
+  # estimate distributed lag values for each day
+  estimate <-  pm_b %*% dl_parms
+  # covariance matrix for knots 
+  # fix the matrix
+  cov_matrix <- as.matrix(vcov(mod))[2:(lag_df+1), 2:(lag_df+1)]
+  # estimate variance of spline
+  variance <- pm_b %*% cov_matrix %*% t(pm_b)
+  # estimate standard error
+  se <- sqrt(diag(variance))
+  # calculate lower and upper bound
+  lower95 <- estimate+(se*qnorm(1-0.975))
+  upper95 <- estimate+(se*qnorm(0.975))
+  # time variable
+  time <- ((rep(1:length(estimate))-1))
+
+  # estimate cumulative if true
+    if(cumulative==T) {
+      type <- rep("cumulative", times = length(estimate))
+      # sequential cumulative estimate
+      cumulative_estimate <- sapply(seq_along(estimate), function(x){
+        sum(estimate[1:x])
+      })
+      # stderr cumulative effect
+      cumulative_se <- sapply(seq_along(estimate), function(x){
+        sqrt(sum(variance[1:x,1:x]))
+      })
+      # cumulative 95CI
+      lower95 <- cumulative_estimate+(cumulative_se*qnorm(1-0.975))
+      upper95 <- cumulative_estimate+(cumulative_se*qnorm(0.975))
+      # return dataframe
+      return_estimate <- data.frame(type, time, exp(cumulative_estimate), 
+                                    exp(lower95), exp(upper95)) 
+      # assign column names
+      colnames(return_estimate) <- c("type","time","estimate",
+                                     "lower95","upper95") 
+      return(return_estimate)
+      # if cumulative is not true, or false, return distributed lag
+    } else {  
+      
+    type <- rep("lag", times = length(estimate))
+    # return dataframe
+    return_estimate <- data.frame(type, time, exp(estimate), 
+                                  exp(lower95), exp(upper95)) 
+    # assign column names
+    colnames(return_estimate) <- c("type","time","estimate",
+                                   "lower95","upper95") 
+    # return estimate  
+    return(return_estimate)
+    } # end of if
+} 
+
+result2 <- distributed_lag(data=ed_ts_lag, exp_mat = smk_matrix, 
+                          outcome = "asthma", lag_df = 3, pm_spline = pm_spl,
+                          cumulative = F)
+
+rbind(result, result2)
+```
+
+
+```{r cumulative_results}
+cumulative_results <- outcomes %>% 
+  map_dfr(distributed_lag(data=ed_ts_lag, exp_mat = smk_matrix, 
+                          outcome = ., lag_df = 3, pm_spline = pm_spl,
+                          cumulative = F))
+
 
 ```
 
-Running a Poisson random effects model. Regressing all-cause mortality on GWR smoke by 10 ug/m^3^. In addition to treating each county as a random effect, I've also adjusted for weekend and included a population offset.
+We can now model our outcome on the PM~2.5~ basis in a random-effects Poisson model, adjusting for covariates.
 
-```{r all_cause_mod}
-ggplot(data=ed_ts, aes(x=gwr10, y=(asthma/population))) +
-  geom_point()
-
-wash_subset <- ed_ts %>% 
-  filter(state == "Washington") %>% 
-  filter(date < "2015-09-20")
-
-colo_subset <- ed_ts %>% 
-  filter(state == "Colorado") %>% 
-  filter(date < "2015-09-20")
-
-glimpse(ed_ts)
-
-mod <- glmer(asthma ~ gwr_smk10 +
-                (1|fips) + offset(log(population)),
-           family = "poisson"(link="log"), 
-           data = colo_subset)
-
-summary(mod)
-```
 

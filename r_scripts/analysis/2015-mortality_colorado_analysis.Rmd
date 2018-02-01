@@ -462,7 +462,7 @@ summary(mod)
 AIC(mod)
 ```
 
-Using the basis estimates, we can estimate the cumulative effect over the 7 days and also the daily effect.
+Using the basis estimates, we can estimate the cumulative effect over the 7 days and also the daily effect. I'm including a 7 degree of freedom spline for PM~2.5~ as well.
 
 ```{r dl_estimates}
 # output distributed lag beta parameters
