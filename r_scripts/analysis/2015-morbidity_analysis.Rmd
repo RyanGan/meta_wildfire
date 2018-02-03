@@ -2,6 +2,8 @@
 title: 'Wildfire Smoke and Mortality '
 author: "Ryan Gan"
 output:
+  html_document:
+    df_print: paged
   html_notebook:
     number_sections: yes
 editor_options:
@@ -646,7 +648,7 @@ I've run degrees of freedom from 5 to 13 and plotted small multiples to visualiz
 
 ```{r spline_fit}
 # define degrees of freedom
-spl_df <- 5:13
+spl_df <- 5:20
 
 # fit spline by date
 spline_fits <- spl_df %>% 
@@ -660,17 +662,30 @@ spline_fits <- spl_df %>%
     pm_pred <- predict(pm_mod, type="response")
     # rep df val by length of prediction
     degree_freedom <- rep(df_val, length(pm_pred))
+    # rep aic val by lenth of prediction 
+    aic <- round(rep(AIC(pm_mod), length(pm_pred)),2)
     # join with total_ed 
     plot_df <- total_ed %>% 
       select(date, fips, gwr_smk10) %>% 
-      cbind(pm_pred, degree_freedom)
+      cbind(pm_pred, degree_freedom, aic)
   } # end function
 ) # end map 
 ```
 
+Table of AIC values degrees of freedom.
+```{r pm_aic_tab}
+pm_aic_tab <- spline_fits %>% 
+  group_by(degree_freedom) %>% 
+  summarise(aic = min(aic))
+
+pm_aic_tab
+```
+
+
 Plotting fits of splines to see how well spline estimates track PM~2.5~ exposure series.
 
 ```{r spline_fit_plot}
+head(spline_fits)
 ggplot(data = spline_fits, aes(x=date, y=gwr_smk10)) +
   geom_point(colour = "#24c6dc", size = 0.2) +
   geom_line(aes(x=date, y=pm_pred), colour = "#ff00cc") +
@@ -681,13 +696,13 @@ ggplot(data = spline_fits, aes(x=date, y=gwr_smk10)) +
   ryan_theme
 ```
 
-With less degrees of freedom, the spline fit is less pronounced. Even at the higher degrees of freedom, the major smoke event doesn't have much of an influence, but you can see the line influenced slightly. I think I might actually try and fit a spline with 5 degrees of freedom to the following models for a couple reasons. I want to account for the natural variation in the exposure series that may also confound the outcome series. Furthermore, I don't think I actually want to capture the variation of the smoke events as this is what we are interested in. In other words, I think I am trying to account for what would have been a natural pattern if the smoke were not present. This also raises a question about the GWR Smoke variable, which subtracts off the median value over this time. I wonder if that's appropriate? Question to think about.
+With less degrees of freedom, the spline fit is less pronounced. Even at the higher degrees of freedom, the major smoke event doesn't have much of an influence, but you can see the line influenced slightly. Peng et al. 2006 suggests that there is less bias overall with ns splines with higher degrees of freedom, but I also don't want to slow down my mixed effects model too much since the more knots there are, the longer it will take to run. I wonder if that's appropriate? Question to think about.
 
-Fitting univariate model with 7 degrees of freedom spline
+Fitting univariate model with 13 degrees of freedom spline. Has a relatively low AIC and I think my models should converge.
 
 ```{r results_pm_spline}
 # define pm spline
-pm_spl <- ns(total_ed$date, df = 7)
+pm_spl <- ns(total_ed$date, df = 13)
 
 # vector of names of outcomes to regress
 outcomes <- colnames(total_ed)[4:14]
@@ -763,7 +778,7 @@ gwr_lag <- pm %>%
 
 # join with morbidity data
 ed_ts_lag <- total_ed %>%
-  select(-gwr_smk10, -pm_pred) %>% 
+  select(-gwr_smk10) %>% 
   left_join(gwr_lag, by = c("fips", "date")) %>% 
   filter(complete.cases(.)) 
 ```
@@ -775,22 +790,69 @@ Create PM~2.5~ matrix based on the lag exposure, and apply a natural spline "ns"
 smk_matrix <- as.matrix(select(ed_ts_lag, gwr_smk10:gwr_smk_lag6))
 ```
 
-Creating distributed lag function that outputs a dataframe of lagged values and cumulative effect over the lag period.
-```{r dl_function}
-pm_spl <- ns(ed_ts_lag$date, df = 7)
+Finding best-fit of lag spline for degrees of freedom 3 to 5.
+```{r dl_fit_function}
+#function
+dl_fit <- function(data, exp_mat, outcome, 
+                   lag_df, pm_spline) {
+        # create list of lengh pm_df
+        mod_aic <- sapply(lag_df, function(x){
+          pm_b <- splines::ns(0:(ncol(exp_mat)-1), df=x, intercept=T)
+          # create pm basis
+          pm_basis <- exp_mat %*% pm_b
+          # run model
+          mod <- glmer(as.formula(paste0(outcome, 
+            "~pm_basis + pm_spline + (1|fips) + offset(log(population))")),
+             data, family="poisson"(link="log"), 
+             control = glmerControl(optimizer = "bobyqa"))
+          aic <- AIC(mod)
+        return(aic)
+      }) # end sapply
+    # create aic df
+    pm_df_aic <- data.frame(outcome, lag_df, mod_aic)
+    return(pm_df_aic)
+}
+```
 
+Using the fit function to find the model with the best fit based on the lowest AIC. 
+
+```{r dl_lag_fit}
+# defining exposure spline with 13 df
+pm_spl <- ns(ed_ts_lag$date, df = 13)
+# find aic fit for each outcome
+dl_fit_df <- outcomes %>% 
+  map_dfr(~dl_fit(data=ed_ts_lag, exp_mat = smk_matrix, outcome = .,
+                  lag_df = 2:5, pm_spline = pm_spl)) %>% 
+  mutate(outcome = forcats::fct_relevel(outcome, outcomes))
+
+# output degrees of freedom minimum aic 
+min_aic <- dl_fit_df %>% 
+  group_by(outcome) %>% 
+  slice(which.min(mod_aic))
+
+# print table
+knitr::kable(min_aic, caption = "Best-fit spline for distributed lag")
+```
+
+
+Creating distributed lag function that outputs a dataframe of lagged values and cumulative effect over the lag period.
+
+Note on function: consider adding a covariate option instead of pm_spline. I could then add covariates like weekend, with relative ease rather than updating the formula inside of function itself.
+
+```{r dl_function}
+# distributed lag function
 distributed_lag <- function(data, exp_mat, outcome, 
-                            lag_df, pm_spline, cumulative=T){
+                            lag_df, pm_spline){
   # define basis b using natural spline function
-  pm_b <- ns(0:6, df = lag_df, intercept = T)
+  pm_b <- ns(0:(ncol(exp_mat)-1), df = lag_df, intercept = T)
   # multiply lagged pm matrix by basis
-  pm_basis <- smk_matrix %*% pm_b
+  pm_basis <- exp_mat %*% pm_b
   # fit mixed model
   mod <- glmer(as.formula(paste0(outcome, 
-            "~pm_basis + pm_spline + (1|fips)+ offset(log(population))")),
-             ed_ts_lag, family="poisson"(link="log"), 
+            "~pm_basis + pm_spline + (1|fips) + offset(log(population))")),
+             data, family="poisson"(link="log"), 
              control = glmerControl(optimizer = "bobyqa"))
-
+  
   # calculate estimates ----
   # output pm basis parameters
   dl_parms <- broom::tidy(mod) %>% 
@@ -800,72 +862,223 @@ distributed_lag <- function(data, exp_mat, outcome,
   
   # estimate distributed lag values for each day
   estimate <-  pm_b %*% dl_parms
+  # time variable
+  time <- ((rep(1:length(estimate))-1))
   # covariance matrix for knots 
   # fix the matrix
   cov_matrix <- as.matrix(vcov(mod))[2:(lag_df+1), 2:(lag_df+1)]
   # estimate variance of spline
   variance <- pm_b %*% cov_matrix %*% t(pm_b)
-  # estimate standard error
-  se <- sqrt(diag(variance))
+  # estimate lag ----
+  # estimate standard error for each lag day
+  l_se <- sqrt(diag(variance))
   # calculate lower and upper bound
-  lower95 <- estimate+(se*qnorm(1-0.975))
-  upper95 <- estimate+(se*qnorm(0.975))
-  # time variable
-  time <- ((rep(1:length(estimate))-1))
+  l_lower95 <- estimate+(l_se*qnorm(1-0.975))
+  l_upper95 <- estimate+(l_se*qnorm(0.975))
+  l_type <- as.character(rep("lag", times = length(estimate)))
+  # l_estimate
+  l_estimate <- data.frame(outcome, l_type, time, exp(estimate), 
+                                  exp(l_lower95), exp(l_upper95)) 
+  # assign column names
+  colnames(l_estimate) <- c("outcome", "type","time", "estimate",
+                            "lower95","upper95") 
 
-  # estimate cumulative if true
-    if(cumulative==T) {
-      type <- rep("cumulative", times = length(estimate))
-      # sequential cumulative estimate
-      cumulative_estimate <- sapply(seq_along(estimate), function(x){
+  # estimate cumulative ----
+  c_type <- as.character(rep("cumulative", times = length(estimate)))
+    # sequential cumulative estimate
+    cumulative_estimate <- sapply(seq_along(estimate), function(x){
         sum(estimate[1:x])
       })
-      # stderr cumulative effect
-      cumulative_se <- sapply(seq_along(estimate), function(x){
+    # stderr cumulative effect
+    cumulative_se <- sapply(seq_along(estimate), function(x){
         sqrt(sum(variance[1:x,1:x]))
       })
-      # cumulative 95CI
-      lower95 <- cumulative_estimate+(cumulative_se*qnorm(1-0.975))
-      upper95 <- cumulative_estimate+(cumulative_se*qnorm(0.975))
-      # return dataframe
-      return_estimate <- data.frame(type, time, exp(cumulative_estimate), 
-                                    exp(lower95), exp(upper95)) 
-      # assign column names
-      colnames(return_estimate) <- c("type","time","estimate",
-                                     "lower95","upper95") 
-      return(return_estimate)
-      # if cumulative is not true, or false, return distributed lag
-    } else {  
-      
-    type <- rep("lag", times = length(estimate))
-    # return dataframe
-    return_estimate <- data.frame(type, time, exp(estimate), 
-                                  exp(lower95), exp(upper95)) 
-    # assign column names
-    colnames(return_estimate) <- c("type","time","estimate",
-                                   "lower95","upper95") 
-    # return estimate  
-    return(return_estimate)
-    } # end of if
-} 
+  # cumulative 95CI
+  c_lower95 <- cumulative_estimate+(cumulative_se*qnorm(1-0.975))
+  c_upper95 <- cumulative_estimate+(cumulative_se*qnorm(0.975))
+  # return dataframe
+  c_estimate <- data.frame(outcome, c_type, time,
+    exp(cumulative_estimate), exp(c_lower95), exp(c_upper95))
+  # assign column names
+  colnames(c_estimate) <- c("outcome", "type","time","estimate",
+                                 "lower95","upper95") 
+  
+  # bind lag and cumulative estimates together
+  return_estimate <- rbind(c_estimate, l_estimate)
+  # return estimate  
+  return(return_estimate)
+} # end of function
+```
 
-result2 <- distributed_lag(data=ed_ts_lag, exp_mat = smk_matrix, 
-                          outcome = "asthma", lag_df = 3, pm_spline = pm_spl,
-                          cumulative = F)
+Estimating the cumulative effect of GWR smoke on cardiopulmonary outcomes with a the fit degree of freedom spline for lagged response and a 7 degree of freedom PM~2.5~ exposure spline. Accounting for county as a random intercept.
 
-rbind(result, result2)
+Running distributed_lag function on vector of each outcome.
+
+```{r dl_results}
+# defining exposure spline
+pm_spl <- ns(ed_ts_lag$date, df = 13)
+# create outcome vector and degrees of freedom vector to use map2 function
+outcome_vector <- min_aic$outcome
+df_vector <- min_aic$lag_df
+# estimate cumulative results
+dl_results <- map2(.x=outcome_vector, .y=df_vector,
+  ~distributed_lag(data=ed_ts_lag, exp_mat = smk_matrix, outcome = .x, 
+                   lag_df = .y, pm_spline = pm_spl)) %>% 
+  plyr::rbind.fill()
+
+#knitr::kable(dl_results, caption = "Distributed lag results")
+```
+
+## Cumulative Effect
+
+Plotting cumulative results.
+
+```{r cumulative_plot}
+cumulative_results <- dl_results %>% 
+  filter(type == "cumulative")
+# plot
+ggplot(cumulative_results, aes(x=time, y=estimate)) +
+  geom_line(colour = "#0ed2f7", size = 1) +
+  geom_ribbon(aes(ymin = lower95, ymax = upper95), 
+              fill = "#b2fefa", alpha = 0.3) + 
+  scale_x_continuous(breaks = c(seq(0,7, by=1))) +
+  geom_hline(yintercept = 1, linetype = 2, colour = "red") +
+  facet_wrap(~outcome) +
+  ylab(expression("RR: 10 ug/m^3 increase smoke PM"[2.5])) +
+  xlab("Lagged Days") +
+  ggtitle("Cumulative") +
+  ryan_theme +
+  theme(panel.grid.major.x = element_blank(),
+        panel.grid.major.y = element_line(linetype = "dotted"),
+        panel.grid.minor = element_blank())
+```
+
+It looks like over five to six days of cumulative exposure to smoke PM~2.5~ increases the risk for respiratory emergency department hospitalizations. This appears to be the case for asthma and COPD around 4 days. For cardiovascular outcomes, there may be an increase in the rate after multiple days of exposure. This might hold true for the CVD outcomes of arrhythmia, and myocardial infarction (a sub-classification of ischemic heart disease and likely the majority of events, which is probably why the signal is similar).
+
+## Lagged Effect
+
+Plotting lagged effect of specific days.
+
+```{r lagged_results}
+# estimate lagged results
+lagged_results <- dl_results %>% 
+  filter(type == "lag")
+# plot
+ggplot(lagged_results, aes(x=time, y=estimate)) +
+  geom_line(colour = "#673ab7", size = 1) +
+  geom_ribbon(aes(ymin = lower95, ymax = upper95), 
+              fill = "#9d50bb", alpha = 0.3) + 
+  scale_x_continuous(breaks = c(seq(0,7, by=1))) +
+  geom_hline(yintercept = 1, linetype = 2, colour = "red") +
+  facet_wrap(~outcome) +
+  ylab(expression("RR: 10 ug/m^3 increase smoke PM"[2.5])) +
+  xlab("Lagged Days") +
+  ggtitle("Lagged") +
+  ryan_theme +
+  theme(panel.grid.major.x = element_blank(),
+        panel.grid.major.y = element_line(linetype = "dotted"),
+        panel.grid.minor = element_blank())
+```
+
+Lagged days give some interesting shapes for asthma and COPD that may suggest harvesting, where there is a peak, then a dip in the rates. Shape may be a little wonky with degrees of freedom of 4+. Could be real though.
+
+## Sensitivity Analysis
+
+I'm concerned about the last week or so of September where the counts drop off. This is a similar thing I've seen at the end of each year which I sometimes attributed to the New Years, but it could also be that those admissions are processed in early January the following year and possibly counted. In the case of the switch from ICD-9 to ICD-10, it could be that persons admitted on the last couple days of September 2015 that would normally be coded using ICD-9 could have been coded using ICD-10. I'm going to run the distributed lag analyses excluding the last week of September 2015.
+
+Starting filtering the dataframe to exclude the last week of September.
+```{r dl_sen_subset}
+# subset dataframe
+ed_lag_sn <- ed_ts_lag %>% 
+  filter(date <= "2015-09-24")
+
+# subset smoke matrix
+smk_mat_sn <- as.matrix(select(ed_lag_sn, gwr_smk10:gwr_smk_lag6))
+```
+
+Finding new distributed lag spline fits.
+
+```{r lag_fit_sn}
+# redfine pm_spl based on new date vector
+pm_spl_sn <-ns(ed_lag_sn$date, df = 13)
+# find aic fit for each outcome
+dl_fit_df_sn <- outcomes %>% 
+  map_dfr(~dl_fit(data=ed_lag_sn, exp_mat = smk_mat_sn, outcome = .,
+                  lag_df = 2:5, pm_spline = pm_spl_sn)) %>% 
+  mutate(outcome = forcats::fct_relevel(outcome, outcomes))
+
+# output degrees of freedom minimum aic 
+min_aic_sn <- dl_fit_df %>% 
+  group_by(outcome) %>% 
+  slice(which.min(mod_aic))
+
+# print table
+knitr::kable(min_aic_sn, caption = paste0("Sensitivity: best-fit spline for",
+                                       " distributed lag"))
+```
+
+Running sensitivit results based on new degrees of freedom.
+
+```{r dl_sn_results}
+# defining exposure spline
+pm_spl_sn <-ns(ed_lag_sn$date, df = 13)
+# create outcome vector and degrees of freedom vector to use map2 function
+outcome_vector <- min_aic_sn$outcome
+df_vector <- min_aic_sn$lag_df
+# estimate cumulative results
+dl_sn_results <- map2(.x=outcome_vector, .y=df_vector,
+  ~distributed_lag(data=ed_lag_sn, exp_mat = smk_mat_sn, 
+                          outcome = .x, lag_df = .y, 
+                   pm_spline = pm_spl_sn)) %>% 
+  plyr::rbind.fill()
+```
+
+Sensitivity cumulative effect results.
+
+```{r cumulative_sn_plot}
+cumulative_results <- dl_sn_results %>% 
+  filter(type == "cumulative")
+# plot
+ggplot(cumulative_results, aes(x=time, y=estimate)) +
+  geom_line(colour = "#0ed2f7", size = 1) +
+  geom_ribbon(aes(ymin = lower95, ymax = upper95), 
+              fill = "#b2fefa", alpha = 0.3) + 
+  scale_x_continuous(breaks = c(seq(0,7, by=1))) +
+  geom_hline(yintercept = 1, linetype = 2, colour = "red") +
+  facet_wrap(~outcome) +
+  ylab(expression("RR: 10 ug/m^3 increase smoke PM"[2.5])) +
+  xlab("Lagged Days") +
+  ggtitle("Sensitivity: Cumulative") +
+  ryan_theme +
+  theme(panel.grid.major.x = element_blank(),
+        panel.grid.major.y = element_line(linetype = "dotted"),
+        panel.grid.minor = element_blank())
+```
+
+Sensitivity lagged results.
+
+```{r lagged_sn_results}
+# estimate lagged results
+lagged_results <- dl_sn_results %>% 
+  filter(type == "lag")
+# plot
+ggplot(lagged_results, aes(x=time, y=estimate)) +
+  geom_line(colour = "#673ab7", size = 1) +
+  geom_ribbon(aes(ymin = lower95, ymax = upper95), 
+              fill = "#9d50bb", alpha = 0.3) + 
+  scale_x_continuous(breaks = c(seq(0,7, by=1))) +
+  geom_hline(yintercept = 1, linetype = 2, colour = "red") +
+  facet_wrap(~outcome) +
+  ylab(expression("RR: 10 ug/m^3 increase smoke PM"[2.5])) +
+  xlab("Lagged Days") +
+  ggtitle("Sensitivity: Lagged") +
+  ryan_theme +
+  theme(panel.grid.major.x = element_blank(),
+        panel.grid.major.y = element_line(linetype = "dotted"),
+        panel.grid.minor = element_blank())
 ```
 
 
-```{r cumulative_results}
-cumulative_results <- outcomes %>% 
-  map_dfr(distributed_lag(data=ed_ts_lag, exp_mat = smk_matrix, 
-                          outcome = ., lag_df = 3, pm_spline = pm_spl,
-                          cumulative = F))
 
-
-```
-
-We can now model our outcome on the PM~2.5~ basis in a random-effects Poisson model, adjusting for covariates.
 
 
