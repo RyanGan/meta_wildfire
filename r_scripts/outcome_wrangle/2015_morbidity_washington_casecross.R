@@ -10,6 +10,7 @@
 # libraries ----
 library(tidyverse)
 library(haven)
+library(survival)
 
 # creation of county key -----
 COUNTYRES <- c(paste0("0", 1:9), as.character(10:39))
@@ -119,7 +120,7 @@ time.stratified <- function(data, id, covariate=F, admit_date,
 
 # I need to figure out how to update my case.crossover package
 
-# asthma subset check
+# asthma casecross over test ----
 asthma <- chars_2015_inpat %>% 
   filter(asthma == 1) %>% 
   filter(date >= "2015-06-01" & date <= "2015-09-30") %>% 
@@ -127,11 +128,21 @@ asthma <- chars_2015_inpat %>%
 
 
 asthma_cc <- time.stratified(data=asthma, id="SEQ_NO_ENC", 
-                             covariate = c("ZIPCODE", "fips", "AGE", "SEX"),
-                             admit_date = "date", start_date = "2015-06-01",
-                             end_date = "2015-09-30", interval = 7)
+  covariate = c("ZIPCODE", "fips", "AGE", "age_cat", "SEX"),
+  admit_date = "date", start_date = "2015-06-01", end_date = "2015-09-30", 
+  interval = 7) %>% 
+  mutate(date = as.Date(date, format = "%Y-%m-%d"),
+         outcome = as.numeric(as.character(outcome))) %>% 
+  left_join(county_pm, by = c("fips", "date")) %>% 
+  mutate(gwr_smk10 = gwr_smk/10)
 
+# read in pm 2.5 data
+county_pm <- read_csv("./data/smoke/2015-smoke_wus_county_popwt.csv")
 
-glimpse(asthma)
+age <- asthma_cc %>% 
+  filter(age_cat == "age_under_15")
 
+summary(as.factor(asthma_cc$age_cat))
+mod <- clogit(outcome ~ gwr_smk10 + strata(identifier), data = age)
 
+summary(mod)

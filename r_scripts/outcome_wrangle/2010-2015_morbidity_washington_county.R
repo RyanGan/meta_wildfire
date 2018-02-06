@@ -141,11 +141,11 @@ timeseries <- function(x){
         # 
         # row bind chars inpatient and obs together
         #chars <- bind_rows(chars_inpat, chars_obs) %>% 
-        
+          # join by seq_no_enc
+          #left_join(id, by = "SEQ_NO_ENC") %>% 
         
         chars <- chars_inpat %>% 
-          # join by seq_no_enc
-          left_join(id, by = "SEQ_NO_ENC") %>% 
+          mutate(COUNTYRES = as.character(COUNTYRES)) %>% 
           # filter to ER visits
           filter(ADM_TYPE == "1") %>% 
           # filter to primary diagnosis of cardiopulmonary
@@ -205,8 +205,6 @@ timeseries <- function(x){
 
 # create list of years to read in
 years_list <- list("2011", "2012", "2013", "2014", "2015")
-
-xtabs(~strata, washington_timeseries)
 
 # may be some missing dates for some counties for strata
 strata_seq <- c("total", "age_15_to_65", "age_over_65", "age_under_15",
