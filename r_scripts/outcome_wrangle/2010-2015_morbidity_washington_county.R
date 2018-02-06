@@ -132,15 +132,18 @@ timeseries <- function(x){
           # select specific variables
           select(SEQ_NO_ENC, ADM_TYPE, ADM_DATE, AGE, SEX, 
                  COUNTYRES, STATERES, COUNTYRES, DIAG1)
-        
-        # import observation
-        chars_obs <- haven::read_sas(obs_path) %>% 
-          # select specific variables
-          select(SEQ_NO_ENC, ADM_TYPE, ADM_DATE, AGE, SEX, 
-                 COUNTYRES, STATERES, COUNTYRES, DIAG1)
-        
+# Note 2018-02-06: I commented out observation datset; identical info -----
+        # # import observation
+        # chars_obs <- haven::read_sas(obs_path) %>% 
+        #   # select specific variables
+        #   select(SEQ_NO_ENC, ADM_TYPE, ADM_DATE, AGE, SEX, 
+        #          COUNTYRES, STATERES, COUNTYRES, DIAG1)
+        # 
         # row bind chars inpatient and obs together
-        chars <- bind_rows(chars_inpat, chars_obs) %>% 
+        #chars <- bind_rows(chars_inpat, chars_obs) %>% 
+        
+        
+        chars <- chars_inpat %>% 
           # join by seq_no_enc
           left_join(id, by = "SEQ_NO_ENC") %>% 
           # filter to ER visits
