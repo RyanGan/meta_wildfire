@@ -16,11 +16,12 @@ This notebook contains code and methods to evaluate the association between wild
 
 ## Set up
 
-Setting up knitr chunk options.
+Setting up knitr chunk options. Hiding messages, warnings, and code so that the document is easier to read for collaborators.
 
 ```{r kniter_opt}
 knitr::opts_chunk$set(fig.height = 6, fig.width = 8, fig.align = "center",
-                      progress = F)
+                      progress = F, message = F, warning = F, echo=F,
+                      results = "asis")
 ```
 
 Loading the tidyverse package, which contains most packages I will need for data cleaning, visualizations, and analysis. Loading stringr package for character string manipulation.
@@ -58,18 +59,16 @@ Importing the Colorado and Washington state inpatient emergency department visit
 #### Note 2018-01-29: 
 Consider adding all inpatient visits as well for all these states. Would this be a general question of hospital utilization?
 
-Importing Colorado 2010 to 2015 time series and viewing first observations.
+Importing Colorado 2010 to 2015 time series.
 
 ```{r colorado_import}
 # define relative path to data folder
 co_path <- paste0("../../data/health/2010-2015_morbidity_co_ts.csv")
 # read in dataframe using read_csv function from tidyverse package
 co_ts <- read_csv(co_path, progress = F) 
-# glimpse first observations
-glimpse(co_ts)
 ```
 
-Importing Washington 2011 to 2015 time series and viewing first observations.
+Importing Washington 2011 to 2015 time series.
 
 ```{r washington_import}
 # define relative path
@@ -77,8 +76,6 @@ wa_path <- paste0("../../data/health/2011-2015_morbidity_wa_ts.csv")
 # read in dataframe
 wa_ts <- read_csv(wa_path, progress = F) %>% 
   mutate(fips = as.character(fips))
-# glimpse first obs
-glimpse(wa_ts)
 ```
 
 Spot for Oregon import.
@@ -137,6 +134,7 @@ ggplot(data = pop_totals, aes(x=year, y=pop, color = state)) +
 Washington has about 2 million more people residing in the state compared to Colorado. Both states have a similar rate of population growth over the 7 year period. We could possibly account for this rate in the denominator.
 
 I'm going to prepare the 2015 Washington and Colorado county denominators that will be joined to the analysis data frame later on.
+
 ```{r county_denom_2015}
 county_denom <- wa_denom %>% 
   mutate(fips = as.character(fips)) %>% 
@@ -312,8 +310,6 @@ pm <- read_csv(pm_path) %>%
          smoke5 = ifelse(gwr_smk > 5, 1, 0),
          smoke10 = ifelse(gwr_smk > 10, 1, 0),
          smoke15 = ifelse(gwr_smk > 15, 1, 0))
-
-glimpse(pm)
 ```
 
 Note, I didn't create a smoke-wave binary variable because the 98^th^ percentile with this reduced time series is skewed (36 ug/m^3^).
@@ -351,6 +347,7 @@ state_sf <- st_read("../../data/shapefile/us_state",
   # assign wgs84 projection
   st_transform(wgs84) 
 ```
+
 
 Mapping number of smoke days where GWR PM~2.5~ > 10 ug/m^3^.
 
@@ -395,7 +392,6 @@ pm_aggregate <- pm %>%
 Plotting time series of county values of PM~2.5~ for each state and method from 2015-06-01 to 2015-09-30. I've added in the background levels (red line).
 
 ```{r pm_plot}
-state_background
 ggplot(pm_aggregate, aes(x=date, y=pm, group=fips)) +
   geom_line(colour = "#93f9b9") +
   geom_hline(aes(yintercept = 4.43), 
@@ -558,7 +554,7 @@ ggplot(data=results_plot, aes(x=outcome, y = rr, colour = group)) +
   geom_hline(yintercept = 1, linetype = "dashed", colour = "red") +
   ylab("Risk Ratio") +
   xlab("Outcome") +
-  ggtitle(paste0("Sensitivty: August Only")) +
+  ggtitle(paste0("Sensitivity: August Only")) +
   ryan_theme +
   theme(panel.grid.major.x = element_blank(),
         panel.grid.major.y = element_line(linetype = "dotted"),
@@ -615,7 +611,7 @@ ggplot(data=results_plot, aes(x=outcome, y = rr, colour = group)) +
   geom_hline(yintercept = 1, linetype = "dashed", colour = "red") +
   ylab("Risk Ratio") +
   xlab("Outcome") +
-  ggtitle(paste0("Sensitivty: Spokane")) +
+  ggtitle(paste0("Sensitivity: Spokane")) +
   ryan_theme +
   theme(panel.grid.major.x = element_blank(),
         panel.grid.major.y = element_line(linetype = "dotted"),
@@ -678,14 +674,13 @@ pm_aic_tab <- spline_fits %>%
   group_by(degree_freedom) %>% 
   summarise(aic = min(aic))
 
-pm_aic_tab
+knitr::kable(pm_aic_tab, caption="Degree of Freedom for PM2.5 Smoke trend")
 ```
 
 
 Plotting fits of splines to see how well spline estimates track PM~2.5~ exposure series.
 
 ```{r spline_fit_plot}
-head(spline_fits)
 ggplot(data = spline_fits, aes(x=date, y=gwr_smk10)) +
   geom_point(colour = "#24c6dc", size = 0.2) +
   geom_line(aes(x=date, y=pm_pred), colour = "#ff00cc") +
@@ -816,7 +811,9 @@ dl_fit <- function(data, exp_mat, outcome,
 
 Using the fit function to find the model with the best fit based on the lowest AIC. 
 
-```{r dl_lag_fit}
+This code chunk takes forever. I've saved the best-fit df as a dataframe and turned off evaluation of this code chunk.
+
+```{r dl_lag_fit, eval = F}
 # defining exposure spline with 13 df
 pm_spl <- ns(ed_ts_lag$date, df = 13)
 # find aic fit for each outcome
@@ -829,11 +826,19 @@ dl_fit_df <- outcomes %>%
 min_aic <- dl_fit_df %>% 
   group_by(outcome) %>% 
   slice(which.min(mod_aic))
+```
+
+Spline best-fit table.
+
+```{r dl_fit_tab}
+# manual input of best df
+lag_df <- c(3,4,5,2,2,3,5,3,2,2,2)
+min_aic <- data_frame(outcomes, lag_df) %>% 
+  rename(outcome = outcomes)
 
 # print table
 knitr::kable(min_aic, caption = "Best-fit spline for distributed lag")
 ```
-
 
 Creating distributed lag function that outputs a dataframe of lagged values and cumulative effect over the lag period.
 
@@ -912,13 +917,13 @@ distributed_lag <- function(data, exp_mat, outcome,
 
 Estimating the cumulative effect of GWR smoke on cardiopulmonary outcomes with a the fit degree of freedom spline for lagged response and a 7 degree of freedom PM~2.5~ exposure spline. Accounting for county as a random intercept.
 
-Running distributed_lag function on vector of each outcome.
+Running distributed_lag function on vector of each outcome. I'm going to save the results to a flat file so the knitting process for the markdown file is faster. This step is time-consuming.
 
-```{r dl_results}
+```{r dl_results, eval=F}
 # defining exposure spline
 pm_spl <- ns(ed_ts_lag$date, df = 13)
 # create outcome vector and degrees of freedom vector to use map2 function
-outcome_vector <- min_aic$outcome
+outcome_vector <- min_aic$outcomes
 df_vector <- min_aic$lag_df
 # estimate cumulative results
 dl_results <- map2(.x=outcome_vector, .y=df_vector,
@@ -926,7 +931,16 @@ dl_results <- map2(.x=outcome_vector, .y=df_vector,
                    lag_df = .y, pm_spline = pm_spl)) %>% 
   plyr::rbind.fill()
 
-#knitr::kable(dl_results, caption = "Distributed lag results")
+# save results so I don't have to run them everytime i want to knit doc
+write_csv(dl_results, "../../data/health/2015-morbidity_dl_results.csv")
+```
+
+Read in saved results.
+
+```{r read_dl_results}
+dl_results <- read_csv(paste0("../../data/health/",
+  "2015-morbidity_dl_results.csv")) %>% 
+  mutate(outcome = forcats::fct_relevel(outcome, outcomes))
 ```
 
 ## Cumulative Effect
@@ -953,7 +967,7 @@ ggplot(cumulative_results, aes(x=time, y=estimate)) +
         panel.grid.minor = element_blank())
 ```
 
-It looks like over five to six days of cumulative exposure to smoke PM~2.5~ increases the risk for respiratory emergency department hospitalizations. This appears to be the case for asthma and COPD around 4 days. For cardiovascular outcomes, there may be an increase in the rate after multiple days of exposure. This might hold true for the CVD outcomes of arrhythmia, and myocardial infarction (a sub-classification of ischemic heart disease and likely the majority of events, which is probably why the signal is similar).
+It looks like over five to six days of cumulative exposure to smoke PM~2.5~ increases the risk for respiratory emergency department hospitalizations. This appears to be the case for asthma and COPD around 4 days. For cardiovascular outcomes, there may be an increase in the rate after multiple days of exposure. This might hold true for the CVD outcomes of arrhythmia.
 
 ## Lagged Effect
 
@@ -984,23 +998,29 @@ Lagged days give some interesting shapes for asthma and COPD that may suggest ha
 
 ## Sensitivity Analysis
 
-I'm concerned about the last week or so of September where the counts drop off. This is a similar thing I've seen at the end of each year which I sometimes attributed to the New Years, but it could also be that those admissions are processed in early January the following year and possibly counted. In the case of the switch from ICD-9 to ICD-10, it could be that persons admitted on the last couple days of September 2015 that would normally be coded using ICD-9 could have been coded using ICD-10. I'm going to run the distributed lag analyses excluding the last week of September 2015.
+I'm concerned about the last week or so of September where the counts drop off. This is a similar thing I've seen at the end of each year which I sometimes attributed to the New Years, but it could also be that those admissions are processed in early January the following year and possibly counted. In the case of the switch from ICD-9 to ICD-10, it could be that persons admitted on the last couple days of September 2015 that would normally be coded using ICD-9 could have been coded using ICD-10. I'm going to run the distributed lag analyses excluding September 2015.
 
 Starting filtering the dataframe to exclude the last week of September.
+
 ```{r dl_sen_subset}
 # subset dataframe
 ed_lag_sn <- ed_ts_lag %>% 
-  filter(date <= "2015-09-24")
+  filter(date <= "2015-09-01")
 
 # subset smoke matrix
 smk_mat_sn <- as.matrix(select(ed_lag_sn, gwr_smk10:gwr_smk_lag6))
 ```
 
-Finding new distributed lag spline fits.
+Finding new distributed lag spline fits. First fitting new PM~2.5~ distributed lag fit on subsetted dataframe.
 
-```{r lag_fit_sn}
+```{r pm_fit_sn}
 # redfine pm_spl based on new date vector
 pm_spl_sn <-ns(ed_lag_sn$date, df = 13)
+```
+
+Finding spline degrees of freedom best fit of distributed lag.
+
+```{r dl_fit_sn, eval = F}
 # find aic fit for each outcome
 dl_fit_df_sn <- outcomes %>% 
   map_dfr(~dl_fit(data=ed_lag_sn, exp_mat = smk_mat_sn, outcome = .,
@@ -1011,19 +1031,28 @@ dl_fit_df_sn <- outcomes %>%
 min_aic_sn <- dl_fit_df %>% 
   group_by(outcome) %>% 
   slice(which.min(mod_aic))
+```
+
+Distributed lag fit table for sensitivity analysis.
+
+```{r dl_fit_sn_tab}
+# manual input of best df
+lag_df <- c(3,4,5,2,2,3,5,3,2,2,2)
+min_aic_sn <- data_frame(outcomes, lag_df) %>% 
+  rename(outcome = outcomes)
 
 # print table
 knitr::kable(min_aic_sn, caption = paste0("Sensitivity: best-fit spline for",
                                        " distributed lag"))
 ```
 
-Running sensitivit results based on new degrees of freedom.
+Running sensitivity results based on new degrees of freedom.I've saved the results as a new .csv flat file so I don't have to run these each time as it slows down knitting of the markdown file.
 
-```{r dl_sn_results}
+```{r dl_sn_results, eval = F}
 # defining exposure spline
 pm_spl_sn <-ns(ed_lag_sn$date, df = 13)
 # create outcome vector and degrees of freedom vector to use map2 function
-outcome_vector <- min_aic_sn$outcome
+outcome_vector <- min_aic_sn$outcomes
 df_vector <- min_aic_sn$lag_df
 # estimate cumulative results
 dl_sn_results <- map2(.x=outcome_vector, .y=df_vector,
@@ -1031,9 +1060,21 @@ dl_sn_results <- map2(.x=outcome_vector, .y=df_vector,
                           outcome = .x, lag_df = .y, 
                    pm_spline = pm_spl_sn)) %>% 
   plyr::rbind.fill()
+
+# save results so I don't have to run them everytime i want to knit doc
+write_csv(dl_sn_results, "../../data/health/2015-morbidity_dl_sen_results.csv")
 ```
 
-Sensitivity cumulative effect results.
+Reading back in the saved distributed lag sensitivity analysis results.
+
+```{r read_dl_sn_results}
+dl_sn_results <- read_csv(paste0("../../data/health/",
+  "2015-morbidity_dl_sen_results.csv")) %>% 
+  mutate(outcome = forcats::fct_relevel(outcome, outcomes))
+```
+
+
+Sensitivity cumulative effect results. Results do not change much compared to full time series.
 
 ```{r cumulative_sn_plot}
 cumulative_results <- dl_sn_results %>% 
@@ -1055,7 +1096,7 @@ ggplot(cumulative_results, aes(x=time, y=estimate)) +
         panel.grid.minor = element_blank())
 ```
 
-Sensitivity lagged results.
+Sensitivity lagged results. Results do not change much from full time sereis.
 
 ```{r lagged_sn_results}
 # estimate lagged results
@@ -1078,6 +1119,22 @@ ggplot(lagged_results, aes(x=time, y=estimate)) +
         panel.grid.minor = element_blank())
 ```
 
+# Conclusion
+
+It looks like there may be a cumulative effect on respiratory outcomes, all respiratory, asthma, and COPD following 3 to 4 days of smoke exposure. There may also be a signal with cardiovascular disease. Sensitivity resutls based on time frame are similar, but I've seen some different results that I'm not confident of with some of the classifications of CVD (MI in particular) when I vary the degrees of freedom for the exposure spline or distributed lag spline.
+
+I still have some concerns that the signal with asthma is not as pronounced on the same day as our previous studies. I tend to use this as a marker.
+
+I'm going to run these same analyses using a time-stratified case-crossover approach instead of a time-series.
+
+## Note for Jeff: 
+Regarding the Colorado sensitivity analysis of only including the front range counties. I've done this and find the results don't differ much when including the other counties outside the front range. I think the front range counties carry the most weight as they have the most numbers of events. However, I will take note of this and keep an eye out on further analyses.
+
+## Next Steps:
+- I plan to run time-stratified case-crossover analyses on 2015 data as well. 
+- I will also use the kriging data Kate provided that covers 2011-2015 with available data, which will provide a larger dataset to evaluate. 
+- Plan to run strata-specific results; consider incorporating cesus covariates for SES.
+- Work in 2012 Washington and 2013 Oregon data.
 
 
 
