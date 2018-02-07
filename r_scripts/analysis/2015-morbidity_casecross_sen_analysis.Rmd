@@ -49,3 +49,12 @@ ryan_theme <- theme(panel.background = element_rect(fill = "black",
 
 # Emergency Room Hospitalizations
 
+Bringing in Colorado and Washington ER hospitalization csv files for 2015.
+
+I'm thinking this would be more efficient if I loaded each state.
+```{r outcome_files}
+co_hosp <- read_csv()
+
+```
+
+
