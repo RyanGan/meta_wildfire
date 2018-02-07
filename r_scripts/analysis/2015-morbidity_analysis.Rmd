@@ -923,7 +923,7 @@ Running distributed_lag function on vector of each outcome. I'm going to save th
 # defining exposure spline
 pm_spl <- ns(ed_ts_lag$date, df = 13)
 # create outcome vector and degrees of freedom vector to use map2 function
-outcome_vector <- min_aic$outcomes
+outcome_vector <- min_aic$outcome
 df_vector <- min_aic$lag_df
 # estimate cumulative results
 dl_results <- map2(.x=outcome_vector, .y=df_vector,
