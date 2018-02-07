@@ -13,7 +13,7 @@ ulimit -s unlimited
 cd /home/ryangan/local_git_repo/meta_wildfire/
 
 # export R library
-export R_LIB=$R_LIB:/home/ryangan/R/x86_64-pc-linux-gnu-library/3.4/
+export R_LIB$=$R_LIB:/home/ryangan/R/x86_64-pc-linux-gnu-library/3.4/
 
 # run rscript
 Rscript --vanilla ./r_scripts/analysis/2015-morbidity_dl_ts_analyses.R
