@@ -10,7 +10,12 @@
 # Results are saved as .csv files.
 
 # load libraries ----
-library(tidyverse)
+library(dplyr)
+library(lubridate)
+library(readr)
+library(stringr)
+library(purrr)
+library(plyr)
 library(lme4)
 library(splines)
 
