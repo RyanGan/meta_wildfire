@@ -148,15 +148,6 @@ ed_ts_lag <- total_ed %>%
 # output matrix of smoke and lag variables
 smk_matrix <- as.matrix(select(ed_ts_lag, gwr_smk10:gwr_smk_lag6))
 
-
-# defining exposure spline with 13 df
-pm_spl <- ns(ed_ts_lag$date, df = 13)
-# find aic fit for each outcome
-dl_fit_df <- outcomes %>% 
-  map_dfr(~dl_fit(data=ed_ts_lag, exp_mat = smk_matrix, outcome = .,
-                  lag_df = 2:5, pm_spline = pm_spl)) %>% 
-  mutate(outcome = forcats::fct_relevel(outcome, outcomes))
-
 # define custom functions for dl fit and dl results
 # FIT function
 dl_fit <- function(data, exp_mat, outcome, 
@@ -168,9 +159,9 @@ dl_fit <- function(data, exp_mat, outcome,
     pm_basis <- exp_mat %*% pm_b
     # run model
     mod <- glmer(as.formula(paste0(outcome, 
-      "~pm_basis + pm_spline + (1|fips) + offset(log(population))")),
-      data, family="poisson"(link="log"), 
-      control = glmerControl(optimizer = "bobyqa"))
+                                   "~pm_basis + pm_spline + (1|fips) + offset(log(population))")),
+                 data, family="poisson"(link="log"), 
+                 control = glmerControl(optimizer = "bobyqa"))
     aic <- AIC(mod)
     return(aic)
   }) # end sapply
@@ -178,6 +169,14 @@ dl_fit <- function(data, exp_mat, outcome,
   pm_df_aic <- data.frame(outcome, lag_df, mod_aic)
   return(pm_df_aic)
 }
+
+# defining exposure spline with 13 df
+pm_spl <- ns(ed_ts_lag$date, df = 13)
+# find aic fit for each outcome
+dl_fit_df <- outcomes %>% 
+  map_dfr(~dl_fit(data=ed_ts_lag, exp_mat = smk_matrix, outcome = .,
+                  lag_df = 2:5, pm_spline = pm_spl)) %>% 
+  mutate(outcome = forcats::fct_relevel(outcome, outcomes))
 
 # distributed lag spline fit ----
 
