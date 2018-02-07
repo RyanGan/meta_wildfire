@@ -625,9 +625,8 @@ Anyways, I think the mixed model with all counties is fine and accounts for this
 
 ## Accounting for Background Exposure
 
-Peng et al. advocates for fitting a spline to the exposure series, and not the outcome series. I found an abstract that found fitting a spline to the outcome series works, but can lead to underestimation of the effect size. Also, fitting a spline to the exposure means I need to fit only one spline rather than many to each exposure.
-
-Insert Peng article reference here.
+Peng et al. 2006, "Model choice in time series studies of air pollution
+and mortality", advocates for fitting a spline to the exposure series, and not the outcome series. I found an abstract that found fitting a spline to the outcome series works, but can lead to underestimation of the effect size. Also, fitting a spline to the exposure means I need to fit only one spline rather than many to each exposure.
 
 Prepping data by limiting to total strata and removing any fips missing PM~2.5~ estimates.
 
@@ -642,7 +641,7 @@ For this analysis, I'm using the "splines" package to try and fit the general ex
 
 I've run degrees of freedom from 5 to 13 and plotted small multiples to visualize fit. 
 
-```{r spline_fit}
+```{r pm_spline_fit}
 # define degrees of freedom
 spl_df <- 5:20
 
@@ -666,6 +665,7 @@ spline_fits <- spl_df %>%
       cbind(pm_pred, degree_freedom, aic)
   } # end function
 ) # end map 
+
 ```
 
 Table of AIC values degrees of freedom.
@@ -691,7 +691,7 @@ ggplot(data = spline_fits, aes(x=date, y=gwr_smk10)) +
   ryan_theme
 ```
 
-With less degrees of freedom, the spline fit is less pronounced. Even at the higher degrees of freedom, the major smoke event doesn't have much of an influence, but you can see the line influenced slightly. Peng et al. 2006 suggests that there is less bias overall with ns splines with higher degrees of freedom, but I also don't want to slow down my mixed effects model too much since the more knots there are, the longer it will take to run. I wonder if that's appropriate? Question to think about.
+With less degrees of freedom, the spline fit is less pronounced. Even at the higher degrees of freedom, the major smoke event doesn't have much of an influence, but you can see the line influenced slightly. Peng et al. 2006 suggests that there is less bias overall with ns splines with higher degrees of freedom, but I also don't want to slow down my mixed effects model too much since the more knots there are, the longer it will take to run. I wonder if that's appropriate? Also, I could fit a spline for each county, but that may strain the overall model? Questions to think about. 
 
 Fitting univariate model with 13 degrees of freedom spline. Has a relatively low AIC and I think my models should converge.
 
