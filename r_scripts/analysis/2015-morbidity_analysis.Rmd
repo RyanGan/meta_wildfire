@@ -276,7 +276,7 @@ ggplot(cvd_ts, aes(x=date,y=rate1mil)) +
   ryan_theme
 ```
 
-Overall, the rate for cardiovascular outcomes does not exhibit the same seasonal trends as respiratory outcomes, and remains relatively stable over the period. The rate looks almost 50% higher for Washington; I'm not sure if this might be a true trend or if it's more of an artifact of differences in the discharge data sets provided by the states.
+Overall, the rate for cardiovascular outcomes does not exhibit the same seasonal trends as respiratory outcomes, and remains relatively stable over the period. The rates are similar between the two states. Before, I had said it looks almost 50% higher for Washington; but I believe this was because I was double-counting unique observations that appeared in both the inpatient and observation CHARS datasets. I've only included inpatient observations to match Colorado now.
 
 ### 2015 Cardiovascular Trends
 
@@ -854,9 +854,9 @@ distributed_lag <- function(data, exp_mat, outcome,
   pm_basis <- exp_mat %*% pm_b
   # fit mixed model
   mod <- glmer(as.formula(paste0(outcome, 
-            "~pm_basis + pm_spline + (1|fips) + offset(log(population))")),
-             data, family="poisson"(link="log"), 
-             control = glmerControl(optimizer = "bobyqa"))
+    "~pm_basis + pm_spline + weekend + (1|fips) + offset(log(population))")),
+    data, family="poisson"(link="log"), 
+    control = glmerControl(optimizer = "bobyqa"))
   
   # calculate estimates ----
   # output pm basis parameters
