@@ -120,7 +120,7 @@ write_csv(pm_spline_fits, "./data/health/2015-ts_pm_spline_fit_results.csv")
 
 # distributed lag ----
 # define outcomes to loop through
-outcomes <- ed_ts_lag %>% 
+outcomes <- total_ed %>% 
   select(resp:mi) %>% 
   colnames()
          
