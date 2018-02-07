@@ -1,0 +1,51 @@
+---
+title: "R Notebook"
+output: html_notebook
+editor_options: 
+  chunk_output_type: inline
+---
+
+# Introduction
+
+This notebook contains code and methods of time-stratified case-crossover analyses to check robustness of results for the county-level time-series analysis.
+
+## Set up
+
+Setting up knitr chunk options. Hiding messages, warnings, and code so that the document is easier to read for collaborators.
+
+```{r kniter_opt}
+knitr::opts_chunk$set(fig.height = 6, fig.width = 8, fig.align = "center",
+                      progress = F, message = F, warning = F, echo=F,
+                      results = "asis")
+```
+
+Loading the tidyverse package, which contains most packages I will need for data cleaning, visualizations, and analysis. Loading stringr package for character string manipulation.
+
+```{r packages}
+library(tidyverse) # all-purpose packages
+library(stringr) # working with character strings
+library(case.crossover) # loading my case crossover function
+library(survival)
+library(splines) # splines package
+```
+
+Setting up dark plot color theme.
+
+```{r ggtheme}
+ryan_theme <- theme(panel.background = element_rect(fill = "black", 
+          colour = "black", size = 0.5, linetype = "solid"),
+        panel.grid.major = element_line(size = 0.2, colour = "white"),
+        panel.grid.minor = element_line(size = 0.1, color = "white", 
+                                        linetype = "dotted"),
+        plot.background = element_rect(fill = "#141e30", colour="#141e30",
+                                       size = 0.5, linetype = "solid"),
+        text = element_text(colour = "white"),
+        axis.text = element_text(colour = "white"),
+        strip.background = element_blank(),
+        strip.text = element_text(colour="white"),
+        legend.background = element_blank(),
+        legend.key = element_blank())
+```
+
+# Emergency Room Hospitalizations
+
