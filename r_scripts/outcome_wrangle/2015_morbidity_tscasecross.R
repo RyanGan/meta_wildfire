@@ -1,6 +1,6 @@
 # ------------------------------------------------------------------------------
 # Title: Time-stratified case-crossover dataframes for inpatient emergency 
-#        department hospitalizations 
+#        department hospitalizations and results
 # Author: Ryan Gan
 # Date Created: 2018-02-06
 # ------------------------------------------------------------------------------
@@ -11,6 +11,7 @@
 library(tidyverse)
 library(haven)
 library(survival)
+library(case.crossover)
 
 # creation of county key -----
 COUNTYRES <- c(paste0("0", 1:9), as.character(10:39))
@@ -30,6 +31,23 @@ county_key <- as_data_frame(cbind(COUNTYRES, fips, county))
 
 # load icd9 outcomes data ----
 load("./data/health/icd9_outcome_vectors.RData")
+
+# read in pm 2.5 data
+county_pm <- read_csv("./data/smoke/2015-smoke_wus_county_popwt.csv")
+
+# may be worth creating in a function one day
+gwr_lag <- county_pm %>% 
+  select(fips, date, gwr_smk) %>% 
+  arrange(fips, date) %>% 
+  group_by(fips) %>% 
+  mutate(gwr_smk10 = gwr_smk/10,
+         gwr_smk_lag1 = lag(gwr_smk10, 1, order_by = fips),
+         gwr_smk_lag2 = lag(gwr_smk10, 2, order_by = fips),
+         gwr_smk_lag3 = lag(gwr_smk10, 3, order_by = fips),
+         gwr_smk_lag4 = lag(gwr_smk10, 4, order_by = fips),         
+         gwr_smk_lag5 = lag(gwr_smk10, 5, order_by = fips),
+         gwr_smk_lag6 = lag(gwr_smk10, 6, order_by = fips)) %>% 
+  select(-gwr_smk)
 
 # read 2015 Washington CHARS data ----
 # i decided against reading chars observation data as I think it mostly
@@ -64,70 +82,44 @@ chars_2015_inpat <- haven::read_sas(paste0("./data/health/washington_chars/",
          age_cat = case_when(AGE < 15 ~ "age_under_15",
                              AGE >= 15 & AGE < 65 ~ "age_15_to_65",
                              AGE >= 65 ~ "age_over_65"),
-         COUNTYRES = as.character(COUNTYRES)) %>% 
+         COUNTYRES = as.character(COUNTYRES),
+         age = AGE, 
+         sex = SEX) %>% 
   # join county key
   filter(STATERES == "WA") %>% 
-  left_join(county_key, by = "COUNTYRES")
+  # filter to specific dates
+  filter(date >= "2015-06-01" & date <= "2015-09-30") %>% 
+  left_join(county_key, by = "COUNTYRES") 
 
-# casecross over for each outcome -----
-# custom function
-time.stratified <- function(data, id, covariate=F, admit_date,
-                            start_date, end_date, interval){
-  # if id value is given
-  if(is.character(id)){
-    # vector of ids
-    id_vec <- data[,id]
-  } else { # else if no value provided, create an id variable
-    id_vec <- seq(1, nrow(data), by=1)
-  }
-  # vector of admit dates joined to the id vector
-  admit_date <- data[,admit_date]
-  id_date <- data.frame(id_vec, admit_date)
+# list of case-crossover dataframes joined to lagged pm values
+# vector of outcomes
+outcome_vector <- names(icd9_outcomes)
 
-  # create list of vectors of referent dates and admission date
-  referent_date_list <- apply(id_date, 1, function(x){
-    date_prior <- as.character(seq(as.Date(x[2]),as.Date(start_date),
-                                   by = (-interval)))
-    date_posterior <- as.character(seq(as.Date(x[2]),as.Date(end_date),
-                                       by = (interval)))
-    date <- sort(unique(c(date_prior, date_posterior)))
-    identifier <- rep(x[1], length(date))
-    # outcome
-    outcome <- ifelse(date %in% x[2], 1, 0)
-    id_date_vec <- cbind(identifier, date, outcome)
-    return(id_date_vec)
-  }) # end apply
-  # timestrat dataframe
-  ts_data <- do.call(rbind, referent_date_list)
-  rownames(ts_data) <- NULL
-  ts_data <- as.data.frame(ts_data)
-  # remove white space
-  ts_data$identifier <- gsub("[[:space:]]", "", 
-                             as.character(ts_data$identifier))
-  # if covariates provided, join to the dataframe
-  if(is.character(covariate)){
-    cov_data <- as.data.frame(cbind(id_vec, data[,covariate]))
-    # names of cov data
-    colnames(cov_data) <- c("identifier", covariate)
-    # conver identifier to character to merge
-    cov_data$identifier <- as.character(cov_data$identifier)
-    # merge with ts_data
-    ts_data <- left_join(ts_data, cov_data, by = "identifier")
-  }
-  # return dataframe
-  return(ts_data)
-}
 
-# I need to figure out how to update my case.crossover package
+ts_casecross_list <- icd9_outcomes %>% 
+  # create lists of outcome dataframes
+  map(~filter(chars_2015_inpat, DIAG1 %in% .)) %>% 
+  # filter to date ranges of pm data; function won't work if dates are different
+  map(~filter(., date >= "2015-06-01" & date <= "2015-09-30")) %>% 
+  # apply ts casecross over function and join with pm data
+  map(~time_stratified(data=., id="SEQ_NO_ENC", 
+        covariate = c("DIAG1", "ZIPCODE", "fips", "age", "age_cat", "sex"),
+        admit_date = "date", start_date = "2015-06-01", end_date = "2015-09-30", 
+        interval = 7) %>% 
+      mutate(date = as.Date(date, format = "%Y-%m-%d"),
+         outcome = as.numeric(as.character(outcome))) %>% 
+      left_join(gwr_lag, by = c("fips", "date")))
+  
+head(ts_casecross_list[[2]])
 
 # asthma casecross over test ----
-asthma <- chars_2015_inpat %>% 
-  filter(asthma == 1) %>% 
+copd <- chars_2015_inpat %>% 
+  filter(copd == 1) %>% 
   filter(date >= "2015-06-01" & date <= "2015-09-30") %>% 
-  filter(STATERES == "WA")
+  filter(STATERES == "WA") %>% 
+  filter(age_cat == "age_over_65")
 
-
-asthma_cc <- time.stratified(data=asthma, id="SEQ_NO_ENC", 
+copd_cc <- time_stratified(data=copd, id="SEQ_NO_ENC", 
   covariate = c("ZIPCODE", "fips", "AGE", "age_cat", "SEX"),
   admit_date = "date", start_date = "2015-06-01", end_date = "2015-09-30", 
   interval = 7) %>% 
@@ -136,13 +128,10 @@ asthma_cc <- time.stratified(data=asthma, id="SEQ_NO_ENC",
   left_join(county_pm, by = c("fips", "date")) %>% 
   mutate(gwr_smk10 = gwr_smk/10)
 
-# read in pm 2.5 data
-county_pm <- read_csv("./data/smoke/2015-smoke_wus_county_popwt.csv")
 
-age <- asthma_cc %>% 
-  filter(age_cat == "age_under_15")
 
-summary(as.factor(asthma_cc$age_cat))
-mod <- clogit(outcome ~ gwr_smk10 + strata(identifier), data = age)
+
+mod <- clogit(outcome ~ gwr_smk10 + strata(identifier), data = copd_cc)
 
 summary(mod)
+
