@@ -1,13 +1,21 @@
 ---
-title: "R Notebook"
-output: html_notebook
-editor_options: 
+title: 'Case-Crossover: Wildfire Smoke and Morbidity 2015'
+author: "Ryan Gan"
+date: "2018-02-09"
+output:
+  html_document:
+    df_print: paged
+  html_notebook:
+    number_sections: yes
+editor_options:
   chunk_output_type: inline
 ---
 
 # Introduction
 
-This notebook contains code and methods of time-stratified case-crossover analyses to check robustness of results for the county-level time-series analysis.
+This notebook contains code and methods of time-stratified case-crossover analyses to check robustness of results for the county-level time-series analysis. Here, I use the time-stratified case-crossover design where events (inpatient hospitalizations admitted through emergency department) are identified, and referent days are created for the same observations. For both Colorado and Washington, I use unique observations. Colorado does not have a unique person identifier, so in an effort to make the groups similar, I've used the unique observation identifier. 
+
+Note, I've evaluated results in the past where I use observation and person identifiers, where I've excluded observations after the first visit from the same person and I've found the results do not differ greatly as I think the people that have multipel visits are relatively rare, and do not drive the analyses.
 
 ## Set up
 
@@ -23,8 +31,7 @@ Loading the tidyverse package, which contains most packages I will need for data
 
 ```{r packages}
 library(tidyverse) # all-purpose packages
-library(stringr) # working with character strings
-library(case.crossover) # loading my case crossover function
+library(stringr) # working with character strings 
 library(survival)
 library(splines) # splines package
 ```
@@ -49,12 +56,373 @@ ryan_theme <- theme(panel.background = element_rect(fill = "black",
 
 # Emergency Room Hospitalizations
 
-Bringing in Colorado and Washington ER hospitalization csv files for 2015.
+Loading the saved list of outcome-specific time-stratified case-crossover dataframes created in the 2015-morbidity_tscasecross.R script.
 
-I'm thinking this would be more efficient if I loaded each state.
-```{r outcome_files}
-co_hosp <- read_csv()
-
+```{r outcome_list}
+load("../../data/health/2015-morbidity_casecross_list.RData")
 ```
+
+This list contains dataframes for inpatient visits admitted through emergency room for cardiopulmonary primary outcomes. The time frame for observations are 2015-06-01 to 2015-09-30. 
+
+I've already described the exposure series in the time-series analysis markdown file so I'll just present outcomes results.
+
+## Descriptive Table
+
+```{r descriptive_table}
+outcome <- names(ts_casecross_list)
+  
+dis_tab <- ts_casecross_list %>% 
+  # filter to only outcomes == 1; no referent periods
+  map_dfr(function(x) {
+    df <- filter(x, outcome == 1)
+    total <- df %>% summarise(total=n()) 
+    state <- df %>% group_by(state) %>% summarise(n=n()) %>% spread(state,n)
+    sex <- df %>% group_by(sex) %>% summarise(n=n()) %>% spread(sex,n)
+    age <- df %>% group_by(age_cat) %>% summarise(n=n()) %>% spread(age_cat,n)
+    
+    counts <- bind_cols(total, state, sex, age)
+    return(counts)
+  }) %>% 
+  cbind(outcome,.) %>% 
+  select(outcome:M, age_under_15, age_15_to_65:age_over_65)
+  
+knitr::kable(dis_tab)
+```
+
+I may come back to this and calculate proportions of totals for each subgroup.
+
+## Same-Day Association
+
+Before I get in to lagged associations, I'm going to look at the same day associations. I'm going to start with the binary smoke indicator variables.
+
+Plot of association between binary smoke > 10 ug/m^3^ and cardiopulmonary outcomes.
+
+### Binary Smoke >10 ug/m^3^
+```{r binary_smk10}
+results <- ts_casecross_list %>% 
+  map_dfr(function(x) {
+    # model
+    mod <- clogit(outcome ~ smoke10 + strata(identifier), data = x)
+    # broom:tidy the model
+    result <- broom::tidy(mod) %>% 
+      mutate(odds_ratio = round(exp(estimate),3),
+             lower95 = round(exp(conf.low),3),
+             upper95 = round(exp(conf.high),3),
+             p = round(p.value,3)) %>% 
+      select(odds_ratio:p)
+    # return result
+    return(result)
+    } # end function
+  ) %>% # end map 
+  cbind(outcome, .) %>% 
+  mutate(outcome = forcats::fct_relevel(outcome, names(ts_casecross_list)),
+         group = as.factor(if_else(outcome %in% names(ts_casecross_list)[1:5],
+                    "respiratory", "cardiovascular")))
+# plot
+ggplot(data=results, aes(x=outcome, y = odds_ratio, colour = group)) +
+  geom_point() +
+  geom_errorbar(aes(ymin=lower95, ymax=upper95), width = 0.3) +
+  scale_color_manual(values = c("#9cecfb", "#ff00cc")) +
+  geom_hline(yintercept = 1, linetype = "dashed", colour = "red") +
+  ylab("Odds Ratio") +
+  xlab("Outcome") +
+  ggtitle("Binary Smoke > 10") +
+  ryan_theme +
+  theme(panel.grid.major.x = element_blank(),
+        panel.grid.major.y = element_line(linetype = "dotted"),
+        panel.grid.minor = element_blank(),
+        axis.text.x = element_text(angle = 90, hjust=0.95, vjust = 0.75))
+```
+
+Oddly, no associations or inverse associations observed with respiratory outcomes. Going to look at smoke >15 ug/m^3 as a more specific exposure definition to see if results are similar.
+
+### Binary Smoke >15 ug/m^3^
+```{r binary_smk15}
+results <- ts_casecross_list %>% 
+  map_dfr(function(x) {
+    # model
+    mod <- clogit(outcome ~ smoke15 + strata(identifier), data = x)
+    # broom:tidy the model
+    result <- broom::tidy(mod) %>% 
+      mutate(odds_ratio = round(exp(estimate),3),
+             lower95 = round(exp(conf.low),3),
+             upper95 = round(exp(conf.high),3),
+             p = round(p.value,3)) %>% 
+      select(odds_ratio:p)
+    # return result
+    return(result)
+    } # end function
+  ) %>% # end map 
+  cbind(outcome, .) %>% 
+  mutate(outcome = forcats::fct_relevel(outcome, names(ts_casecross_list)),
+         group = as.factor(if_else(outcome %in% names(ts_casecross_list)[1:5],
+                    "respiratory", "cardiovascular")))
+# plot
+ggplot(data=results, aes(x=outcome, y = odds_ratio, colour = group)) +
+  geom_point() +
+  geom_errorbar(aes(ymin=lower95, ymax=upper95), width = 0.3) +
+  scale_color_manual(values = c("#9cecfb", "#ff00cc")) +
+  geom_hline(yintercept = 1, linetype = "dashed", colour = "red") +
+  ylab("Odds Ratio") +
+  xlab("Outcome") +
+  ggtitle("Binary smoke > 15") +
+  ryan_theme +
+  theme(panel.grid.major.x = element_blank(),
+        panel.grid.major.y = element_line(linetype = "dotted"),
+        panel.grid.minor = element_blank(),
+        axis.text.x = element_text(angle = 90, hjust=0.95, vjust = 0.75))
+```
+
+The effect sizes for the >15 ug/m^3^ cutoff are stronger for most cases compared to the >10 ug/m^3^ cutoff. The binary cutoff suggests an association with COPD, and possibly CVD (IHD and MI in particular).
+
+### Continuous GWR PM~2.5~ Attributed to Smoke
+
+Estimating same-day associations for a 10 ug/m^3^ increase in PM~2.5~ attributed to smoke estimated using geographically-weighted ridge regression.
+
+```{r gwr_smk}
+results <- ts_casecross_list %>% 
+  map_dfr(function(x) {
+    # model
+    mod <- clogit(outcome ~ gwr_smk10+strata(identifier), data = x)
+    # broom:tidy the model
+    result <- broom::tidy(mod) %>% 
+      filter(term == "gwr_smk10") %>% 
+      mutate(odds_ratio = round(exp(estimate),3),
+             lower95 = round(exp(conf.low),3),
+             upper95 = round(exp(conf.high),3),
+             p = round(p.value,3)) %>% 
+      select(odds_ratio:p)
+    # return result
+    return(result)
+    } # end function
+  ) %>% # end map 
+  cbind(outcome, .) %>% 
+  mutate(outcome = forcats::fct_relevel(outcome, names(ts_casecross_list)),
+         group = as.factor(if_else(outcome %in% names(ts_casecross_list)[1:5],
+                    "respiratory", "cardiovascular")))
+# plot
+ggplot(data=results, aes(x=outcome, y = odds_ratio, colour = group)) +
+  geom_point() +
+  geom_errorbar(aes(ymin=lower95, ymax=upper95), width = 0.3) +
+  scale_color_manual(values = c("#9cecfb", "#ff00cc")) +
+  geom_hline(yintercept = 1, linetype = "dashed", colour = "red") +
+  ylab("Odds Ratio") +
+  xlab("Outcome") +
+  ggtitle("Continous GWR Smoke 10 ug/m^3 increase") +
+  ryan_theme +
+  theme(panel.grid.major.x = element_blank(),
+        panel.grid.major.y = element_line(linetype = "dotted"),
+        panel.grid.minor = element_blank(),
+        axis.text.x = element_text(angle = 90, hjust=0.95, vjust = 0.75))
+```
+
+Most estimates suggest no association and some even suggest inverse associations. These results are similar to the same day associations in the county time-series study.
+
+## Distributed Lag Association
+
+Running distributed lag models. First thing I want to do is limit the dataframes in the list to complete cases (i.e. lagged exposures for all 6 days). I'm updating the list to save memory space.
+
+```{r complete_case}
+# limit to complete cases
+ts_casecross_list <- ts_casecross_list %>% 
+  map(~filter(., complete.cases(.))) %>% 
+  # adding in outcome name to each dataframe
+  map2(.x = ., .y = outcome, ~mutate(.x, outcome_name = .y))
+```
+
+
+Starting by finding best-fit of lag spline for degrees of freedom 3 to 5.
+```{r dl_fit_function}
+#function
+dl_fit <- function(data, first_exp_var, last_exp_var, lag_df) {
+        first_var <- as.numeric(which(colnames(data)==first_exp_var))
+        last_var <- as.numeric(which(colnames(data)==last_exp_var))
+        exp_mat <- as.matrix(data[, first_var:last_var])
+        # create list of lengh pm_df
+        mod_aic <- sapply(lag_df, function(x){
+          pm_b <- splines::ns(0:(ncol(exp_mat)-1), df=x, intercept=T)
+          # create pm basis
+          pm_basis <- exp_mat %*% pm_b
+          # run model
+          mod <- clogit(outcome ~ pm_basis + strata(identifier), data = data)
+          aic <- AIC(mod)
+        return(aic)
+      }) # end sapply
+    # create aic df
+    pm_df_aic <- data.frame(lag_df, mod_aic)
+    return(pm_df_aic)
+}
+```
+
+Finding best-fit degree of freedom for distributed lag in a clogit model.
+```{r dl_fit_tab}
+# repeate outcome vars 
+outcome_var <- rep(outcome, each =4)
+# fit table
+dl_fit_tab <- ts_casecross_list %>% 
+  map_dfr(~dl_fit(data = ., first_exp_var = "gwr_smk10", 
+                  last_exp_var = "gwr_smk_lag6", lag_df = 2:5)) %>% 
+  cbind(outcome_var, .)
+
+# find minimum aic for fit
+min_aic_tab <- dl_fit_tab %>% 
+  mutate(outcome_var = forcats::fct_relevel(outcome_var, outcome)) %>%  
+  group_by(outcome_var) %>% 
+  slice(which.min(mod_aic)) 
+  
+min_aic_tab
+```
+
+Distributed lag models based on best-fit degrees of freedom. Defining distributed lag function.
+
+```{r dl_function}
+# distributed lag function
+distributed_lag <- function(data, first_exp_var, last_exp_var,
+                            lag_df){
+  outcome <- unique(data$outcome_name)
+  # extract exposure matrix for tibble in list
+  first_var <- as.numeric(which(colnames(data)==first_exp_var))
+  last_var <- as.numeric(which(colnames(data)==last_exp_var))
+  exp_mat <- as.matrix(data[, first_var:last_var])
+  # define basis b using natural spline function
+  pm_b <- ns(0:(ncol(exp_mat)-1), df = lag_df, intercept = T)
+  # multiply lagged pm matrix by basis
+  pm_basis <- exp_mat %*% pm_b
+  # clogit model
+  mod <- clogit(outcome ~ pm_basis + strata(identifier), data = data)
+  # calculate estimates ----
+  # output pm basis parameters
+  dl_parms <- broom::tidy(mod) %>% 
+    filter(stringr::str_detect(term, "pm_basis")) %>% 
+    select(estimate) %>% 
+    as_vector()
+  # estimate distributed lag values for each day
+  estimate <-  pm_b %*% dl_parms
+  # time variable
+  time <- ((rep(1:length(estimate))-1))
+  # covariance matrix for knots (this differs depending on clogit or glmer)
+  cov_matrix <- as.matrix(vcov(mod))[1:(lag_df), 1:(lag_df)]
+  # estimate variance of spline
+  variance <- pm_b %*% cov_matrix %*% t(pm_b)
+  # estimate lag ----
+  # estimate standard error for each lag day
+  l_se <- sqrt(diag(variance))
+  # calculate lower and upper bound
+  l_lower95 <- estimate+(l_se*qnorm(1-0.975))
+  l_upper95 <- estimate+(l_se*qnorm(0.975))
+  l_type <- as.character(rep("lag", times = length(estimate)))
+  # l_estimate
+  l_estimate <- data.frame(outcome, l_type, time, exp(estimate), 
+                           exp(l_lower95), exp(l_upper95)) 
+  # assign column names
+  colnames(l_estimate) <- c("outcome", "type","time", "estimate",
+                            "lower95","upper95") 
+  # estimate cumulative ----
+  c_type <- as.character(rep("cumulative", times = length(estimate)))
+    # sequential cumulative estimate
+    cumulative_estimate <- sapply(seq_along(estimate), function(x){
+        sum(estimate[1:x])
+      })
+    # stderr cumulative effect
+    cumulative_se <- sapply(seq_along(estimate), function(x){
+        sqrt(sum(variance[1:x,1:x]))
+      })
+  # cumulative 95CI
+  c_lower95 <- cumulative_estimate+(cumulative_se*qnorm(1-0.975))
+  c_upper95 <- cumulative_estimate+(cumulative_se*qnorm(0.975))
+  # return dataframe
+  c_estimate <- data.frame(outcome, c_type, time,
+    exp(cumulative_estimate), exp(c_lower95), exp(c_upper95))
+  # assign column names
+  colnames(c_estimate) <- c("outcome", "type","time","estimate",
+                                 "lower95","upper95") 
+  
+  # bind lag and cumulative estimates together
+  return_estimate <- rbind(c_estimate, l_estimate)
+  # return estimate  
+  return(return_estimate)
+} # end of function
+```
+
+Estimate cumulative and lagged effects.
+
+```{r dl_results}
+# outcome vector
+df_vector <- as.numeric(min_aic_tab$lag_df)
+
+# distributed lag loop
+dl_results <- map2(.x = ts_casecross_list, .y = df_vector,
+        ~distributed_lag(data = .x,first_exp_var = "gwr_smk10", 
+                         last_exp_var = "gwr_smk_lag6", lag_df = .y)) %>% 
+  plyr::rbind.fill()
+```
+
+### Cumulative Effect
+Plot of cumulative effect.
+
+```{r cumulative_plot}
+cumulative_results <- dl_results %>% 
+  filter(type == "cumulative")
+# plot
+ggplot(cumulative_results, aes(x=time, y=estimate)) +
+  geom_line(colour = "#0ed2f7", size = 1) +
+  geom_ribbon(aes(ymin = lower95, ymax = upper95), 
+              fill = "#b2fefa", alpha = 0.3) + 
+  scale_x_continuous(breaks = c(seq(0,7, by=1))) +
+  geom_hline(yintercept = 1, linetype = 2, colour = "red") +
+  facet_wrap(~outcome) +
+  ylab(expression("RR: 10 ug/m^3 increase smoke PM"[2.5])) +
+  xlab("Lagged Days") +
+  ggtitle("Cumulative") +
+  ryan_theme +
+  theme(panel.grid.major.x = element_blank(),
+        panel.grid.major.y = element_line(linetype = "dotted"),
+        panel.grid.minor = element_blank())
+```
+
+These results are similar to the time-series results in effect size. Although the confidence intervals are wider than the time-series models.
+
+### Lagged Effect
+
+Plotting lagged effect of specific days.
+
+```{r lagged_results}
+# estimate lagged results
+lagged_results <- dl_results %>% 
+  filter(type == "lag")
+# plot
+ggplot(lagged_results, aes(x=time, y=estimate)) +
+  geom_line(colour = "#673ab7", size = 1) +
+  geom_ribbon(aes(ymin = lower95, ymax = upper95), 
+              fill = "#9d50bb", alpha = 0.3) + 
+  scale_x_continuous(breaks = c(seq(0,7, by=1))) +
+  geom_hline(yintercept = 1, linetype = 2, colour = "red") +
+  facet_wrap(~outcome) +
+  ylab(expression("RR: 10 ug/m^3 increase smoke PM"[2.5])) +
+  xlab("Lagged Days") +
+  ggtitle("Lagged") +
+  ryan_theme +
+  theme(panel.grid.major.x = element_blank(),
+        panel.grid.major.y = element_line(linetype = "dotted"),
+        panel.grid.minor = element_blank())
+```
+
+Similar with time-series. Also, pronounced effect for asthma except on day 0. I've seen this both in the time-series and now here. This may suggest something real. Perhaps at-risk folks are avoiding going outside, but then a couple days after a high exposure day there is an increased risk? Also, cumulative for asthma is not meaningful if judged by 95%CI, but I think it's because the first day is showing a meaningful inverse association. I'm trying to avoid saying "significant".
+
+# Conclusions
+
+Observing similar findings to time-series study. I'm starting to think that this exposure series is different in it's effect on populations compared to 2012. A couple key differences is that I'm pouplation-weighting by county rather than ZIP. Also, this was a period where counties impacted by smoke seemed to experience a lot of it. Perhaps the exposure period is not enough for appropriate referent periods? I'll look in to this.
+
+## Notes
+- I'd like to check different referent periods. Specifically month. I justified a referent period of the wildfire season before, but it's possible that is not appropriate for this exposure series that had multiple fires and high PM periods. I will try a month, but need to modify my function first.
+- Air pollution warnings hypothsis: The effect of PM~2.5~ is associated with likelihood of an outcome is modified by whether or not the county recieved a air quality advisory.
+
+
+
+
+
+
+
+
 
 
