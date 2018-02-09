@@ -1,5 +1,5 @@
 ---
-title: 'Wildfire Smoke and Mortality '
+title: 'Wildfire Smoke and Morbidity 2015'
 author: "Ryan Gan"
 output:
   html_document:
