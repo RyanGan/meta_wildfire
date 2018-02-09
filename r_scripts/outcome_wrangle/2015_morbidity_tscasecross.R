@@ -10,7 +10,6 @@
 # libraries ----
 library(tidyverse)
 library(haven)
-library(survival)
 library(case.crossover)
 
 # load icd9 outcomes data ----
@@ -109,7 +108,6 @@ chars_2015_inpat <- haven::read_sas(paste0("./data/health/washington_chars/",
   left_join(county_key, by = "COUNTYRES")  %>% 
   select(id, date, dx1, age, age_cat, sex, zip, fips, state)
 
-
 # Colorado -----
 # load hospital morbidity data ----
 co_path <- paste0("../colorado_wildfire/data/health/co_hosp_1015.csv")
@@ -175,8 +173,8 @@ ts_casecross_list <- icd9_outcomes %>%
 stop_time <- Sys.time()
 time <- stop_time - start_time
 time
+# takes about a minute and a half to run
 
 # saving casecross over list as Rdata
 save(ts_casecross_list, file = paste0("./data/health/",
   "2015-morbidity_casecross_list.RData"))
-
