@@ -7,7 +7,7 @@ output: html_document
 
 ## Purpose
 
-This markdown script calculates the proportion of intersection between the 2015 grid shape file and county shape file.
+This markdown script calculates the proportion of intersection between the 2015 grid shape file and county shape file. This grid is different from the 2010-2015 Western US grid for kriged estimates.
 
 ## Setup
 
@@ -31,7 +31,7 @@ Also consider county boundaries. I'm sure they don't change much, but may not hu
 
 ```{r read_sf}
 # grid path
-grid_path <- paste0("../data/shapefile/smoke_grid")
+grid_path <- paste0("../data/shapefile/2015-wus_grid")
 # read grid sf
 grid_sf <- st_read(dsn = grid_path, layer = "wus_grid2015-ko") 
 
