@@ -9,23 +9,151 @@ editor_options:
 
 This R notebook contains code to regrid the NOAA reanalysis air temperature at 2 meters to match the grid used for the kriged estimates of PM~2.5~.
 
-```{r library}
-library(ncdf4)
+```{r setup}
+# libraries used
+library(tidyverse) 
+library(ncdf4) # package for working with .nc files
+library(raster) # raster package
+library(akima) # spatial smoothing/interpolation
 
+# general knitr options
+knitr::opts_chunk$set(fig.width = 7, fig.height = 5)
+```
+
+### Loading NetCDF files
+
+Reading in krig PM~2.5~
+
+```{r pm_nc_read}
+# read pm nc
+pm_nc_path <- paste0("../../data/smoke/krigedPM25_06-15/krigedPM25_2015.nc")
+pm_nc <- nc_open(pm_nc_path)
+# summary of krig nc
+pm_nc
+```
+
+Extract latitude and longitude coordinates for PM grid.
+
+```{r pm_latlon}
+# extract lat and lon
+pm_lat <- ncvar_get(nc = pm_nc, varid = "lat")
+pm_lon <- ncvar_get(nc = pm_nc, varid = "lon")
+dim(pm_lat)
+
+# combine in dataframe
+pm_location <- as_data_frame(cbind(as.vector(pm_lon), as.vector(pm_lat))) %>% 
+  rename(lon = V1, lat = V2) %>% 
+  mutate(grid = as.factor("pm"))
+# summary
+summary(pm_location)
+```
+
+Temperature data from reanalysis dataset.
+
+```{r temp}
 # temp nc_path
-temp_nc_path <- paste0("./data/smoke/air.2m.2015.nc")
+temp_nc_path <- paste0("../../data/smoke/air.2m.2015.nc")
 temp_nc <- nc_open(temp_nc_path)
 # temp nc summary
 temp_nc
-
-# check grid dimensions of 2015 grid
-pm_nc_path <- paste0("./data/smoke/krigedPM25_06-15/krigedPM25_2015.nc")
-krig_nc <- nc_open(pm_nc_path)
-
-krig_nc
-
-# extract points to plot
-t_lat <- 
-temp_coords 
 ```
+
+Extract temperature grid latitude and longitude coordinates. It looks like this grid is a more extensive range than the PM grid, which is just the continental US.
+
+```{r temp_latlon}
+# extract temp lat lon
+t_lat <- ncvar_get(nc = temp_nc, var = "lat")
+t_lon <- ncvar_get(nc = temp_nc, var = "lon")
+# combine in dataframe
+t_location <- as_data_frame(cbind(as.vector(t_lon), as.vector(t_lat))) %>% 
+  rename(lon = V1, lat = V2) %>% 
+  mutate(grid = as.factor("temp"))
+# summary 
+summary(t_location)
+```
+
+### Grid Extents
+I want to know the extent of the two grids.
+
+
+Plotting the centroids of grids for the PM~2.5~ grid (red color) and the temperature grid (blue color). The temperature data extends almost to the artic circle and contains part of the eastern hemisphere. The PM grid box is only over the continental US.
+
+```{r grid_extent}
+ggplot(t_location, aes(x=lon,y=lat)) +
+  geom_point(size = 0.1, alpha = 0.2, color = "blue") +
+  geom_point(data = pm_location, aes(x=lon,y=lat), size = 0.1, color = "red") +
+  theme_minimal()
+```
+
+### Grid Centroids on Subset
+
+Points are hard to see on the extent map so I'm going to subset to a smaller spatial area: lat 40 to 50 degrees north, and lon -100 to -110 degrees west. Plotting centroid points of the two grids. It looks like the temperature grids are further spaced (lower resolution) compared to PM grid.
+
+```{r}
+# bind two grids together
+grid_loc <- rbind(pm_location, t_location)
+       
+# subset to a more managable viewing space
+grid_sub <- grid_loc %>% 
+  filter(lon <= -100 & lon >= -110 & lat <= 50 & lat >=40)
+
+# plot
+ggplot(grid_sub, aes(x=lon,y=lat, color = grid)) +
+  geom_point(size =0.2) +
+  scale_color_manual(values = c("red", "blue")) +
+  theme_minimal()
+```
+
+## Regridding Temperature Values to Match PM Grid
+I will need to produce county-level estimates of temperature weighted by population. That means I will need to regrid population or temperature. Bonne is going to regrid population for me, so I will regrid temperature.I think the most straight-forward method would be some sort of smoothing/interpolation method, but I also think this could be computationally expensive. I think it's also possible to do a nearest neighbor thing where I've identify the temperature centroid nearest to a PM centroid and just assign it that way. 
+
+I think the interpolation method is a more accurate way to do this. I'm going to see how much time it takes to interploate 1 day of temperature values to the PM grid points. I will use the raster package and the akima package for working with gridded data and smoothing.
+
+### Temperature Raster Brick
+Start by reading in the raster brick of the temperature netcdf file. Plotting temperature on 2015-01-01. It looks like the plot shows temperature in Kelvin. Also, looks like the it was very cold in Canada and near the north pole, which is a good check.  You can also sort of see the outline of the North American continent as it's colder than sea tempeartures.
+
+```{r temp_raster}
+# create raster brick
+t_brick <- brick(temp_nc_path, varname="air")
+# plot jan 1st
+plot(t_brick[[1]])
+```
+
+### PM~2.5~ Raster Brick
+
+I believe only the grid centroid points are necissary for regridding. However, I want to just plot and see what's going on with PM~2.5~ on 2015-01-1. It looks like there was very high PM~2.5~ somewhere in California. This agrees with mapped AQS data from Air Now on the same date. I've also noticed that the raster projection for the PM~2.5~ raster is lat lon and the raster projection for temp appears to be in UTM (Lambert projection).
+
+```{r pm_brick}
+pm_brick <- brick(pm_nc_path, varname="PM25")
+plot(pm_brick[[1]])
+```
+
+There are plenty of points on the temperature brick that don't need to be interpolated. To speed up the process, I'm going to clip the temp brick by the raster extent of the pm grid. First, I need to make sure the raster bricks are projeciton on the same coord ref system and have the same units.
+
+```{r pm_extent}
+# define wgs projection
+wgs84 <- "+proj=longlat +datum=WGS84 +ellps=WGS84 +towgs84=0,0,0"
+# assign wgs84 crs to pm_brick
+crs(pm_brick) <- wgs84
+# extent of PM values
+pm_e <- extent(pm_brick)
+
+# temp brick is a lambert projeciton
+crs(t_brick) <- wgs84
+
+t_brick <- projectRaster(t_brick, crs = wgs84)
+# crop temp brick by pm extent
+t_brick_crop <- crop(t_brick, pm_e)
+
+plot(t_brick_crop[[1]])
+temp_nc
+t_brick
+pm_brick
+test <- brick(temp_nc_path, varname ="air")
+rm(test)
+```
+
+
+
+
 
