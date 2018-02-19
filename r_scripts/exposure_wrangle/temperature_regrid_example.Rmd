@@ -1,0 +1,31 @@
+---
+title: "Regrid of NOAA reanalysis temp data to krig PM grid"
+output: html_notebook
+editor_options: 
+  chunk_output_type: inline
+---
+
+## Introduction
+
+This R notebook contains code to regrid the NOAA reanalysis air temperature at 2 meters to match the grid used for the kriged estimates of PM~2.5~.
+
+```{r library}
+library(ncdf4)
+
+# temp nc_path
+temp_nc_path <- paste0("./data/smoke/air.2m.2015.nc")
+temp_nc <- nc_open(temp_nc_path)
+# temp nc summary
+temp_nc
+
+# check grid dimensions of 2015 grid
+pm_nc_path <- paste0("./data/smoke/krigedPM25_06-15/krigedPM25_2015.nc")
+krig_nc <- nc_open(pm_nc_path)
+
+krig_nc
+
+# extract points to plot
+t_lat <- 
+temp_coords 
+```
+
