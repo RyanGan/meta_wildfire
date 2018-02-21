@@ -145,6 +145,7 @@ results <- ts_casecross_list %>%
     # broom:tidy the model
     result <- broom::tidy(mod) %>% 
       mutate(odds_ratio = round(exp(estimate),3),
+             se = round(std.error,3),
              lower95 = round(exp(conf.low),3),
              upper95 = round(exp(conf.high),3),
              p = round(p.value,3)) %>% 
