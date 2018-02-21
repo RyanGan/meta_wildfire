@@ -7,7 +7,7 @@ editor_options:
 
 ## Introduction
 
-This R notebook contains code to regrid the 2015 SEDAC estimates of populationto match the grid used for the kriged estimates of PM~2.5~.
+This R notebook contains code to regrid the 2015 SEDAC estimates of population to match the grid used for the kriged estimates of PM~2.5~. I'm regridding from a higher resolution grid (temperature at 1 km^2^) to a lower resolution grid (PM at 15 km^2^). 
 
 ```{r setup}
 # libraries used
@@ -20,6 +20,7 @@ knitr::opts_chunk$set(fig.width = 7, fig.height = 5)
 ```
 
 ## PM~2.5~ NetCDF
+
 Reading in krig PM~2.5~ netcdf file. I will need this to extract the spatial coordinates for each grid point. I believe the grid resolution is 15 km^2^.
 
 ```{r pm_nc_read}
@@ -33,6 +34,8 @@ Extracting spatial coordinates of PM grid points.
 # extract lat and lon
 pm_lat <- ncvar_get(nc = pm_nc, varid = "lat")
 pm_lon <- ncvar_get(nc = pm_nc, varid = "lon")
+# create id variable
+id <- seq(1:58401)
 # extract pm coords
 pm_coords <- matrix(cbind(as.vector(pm_lon), as.vector(pm_lat)), ncol=2)
 # assign longitude and latitude column names
@@ -72,21 +75,87 @@ Cropping population density to continental US using the extent of the PM grid.
 ```{r us_crop}
 # crop world raster to continental US extent
 us_pop_2015 <- crop(pop_2015, pm_e)
+# removing worldwid pop2015 raster to save some memory
+rm(pop_2015)
 ```
 
-Extracting coordinates and population density.
+Extracting coordinates and population density to a matrix.
 ```{r extracting_raster_coords}
 # extract raster point and values
 pop_coords <- rasterToPoints(us_pop_2015)
 # name columns
 colnames(pop_coords) <- c("lon", "lat", "popden2015")
-# pop_dataframe
-pop_df <- data.frame(pop_coords)
 ```
 
-Plot of population density.
-```{r density_plot}
-ggplot(pop_df, aes(x=lon,y=lat, color=popden2015)) +
-  geom_point()
+### Regrid Raster
+
+Now that I have coordinates for the PM grid and coordinates and population values for the population density grid, I can regrid the population raster to the the PM grid. 
+
+I first need to create an empty raster based on the PM grid.
+```{r empty_raster}
+# create empty raster
+pm_r <- raster(pm_e, nrow=309, ncol=189)
+# extract coordinate from geotiff
+wgs84 <- crs(us_pop_2015)
+# assign wgs84 crs to empty raster
+crs(pm_r) <- wgs84
 ```
+
+Now I can feed in the population coordinates and values to the empty raster. The PM grid points will have multiple population density estimates. I will take the mean of population density for each PM grid. Since the original grid was 1 km^2^, I think the mean of each of these grids  will give me the density ofIf I had population counts, I think summing up the grids would be the best option. However, density should not be very sensivite to use of the mean. It takes a couple minutes.
+
+Interpolation is not an option on my local machine; too expensive compuationally.
+
+```{r population_raster}
+# create population raster
+pop_r <- rasterize(pop_coords[,1:2], pm_r, pop_coords[,3], fun=mean)
+```
+
+### Population Regrid Dataframe
+
+Now that we have a regrided raster, I want to extract the coordinates and population density values and assign it to the GRID_ID used in Kate's and Bonne's kriged estimates and create a dataframe to save that I'll use for population-weighting.
+
+First thing I need to do is to assign grid IDs to each cell value (variable GRID_ID in shapefile). When I extract values from the netcdf file, they do not exactly line up with the ID values of the shapefile provided. Code below creates the grid id key so that they will match.
+
+```{r grid_id}
+# create Cell_ID key that matches the shapefile ----
+cell_id_mat <- t(apply(matrix(58401:1, nrow=309, ncol=189, byrow=T),1,rev))
+# vector of cell id
+cell_id <- as.vector(cell_id_mat)
+
+# GRID_ID matrix based on cell location
+grid_id_mat <- apply(matrix(1:58401, nrow=309, ncol=189), 2, rev)
+# vector of GRID_ID
+GRID_ID <- as.vector(grid_id_mat)
+
+# create grid id key
+grid_id_key <- data.frame(cbind(cell_id, GRID_ID)) 
+```
+
+Extracting population density per 15 km^2 estimates to coordinates of PM grid.
+```{r extract_values}
+popden2015 <- extract(pop_r, pm_coords)
+```
+
+Now that I have a id key and population density estimates for each grid cell, I am going to create a dataframe of grid population density per 15km^2.
+
+```{r pop_density_df}
+pop_density_grid <- data.frame(cbind(id, pm_coords, popden2015)) %>% 
+  rename(cell_id = id) %>% 
+  left_join(grid_id_key, by = "cell_id")
+```
+
+### Regridded Population Plot
+
+Plotting population density. It looks like regridding worked. I can see populated cities of New York, Chicago, Toronto, and Los Angeles pretty easy. Grey color is NA, which nicely outlines the ocean. However, when I population-weight, I should set these values to 0.
+```{r density_plot}
+ggplot(pop_density_grid, aes(x=lon,y=lat, color=popden2015)) +
+  geom_point() +
+  scale_color_gradient2(low = "black", mid = "purple", high="white", 
+                        midpoint = 5000) +
+  theme_minimal()
+```
+
+
+
+
 

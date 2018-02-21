@@ -126,5 +126,5 @@ wus_prop_int <- prop_int_tibble %>%
   mutate_all(funs(replace(., is.na(.), 0)))
 
 # save file
-write_csv(wus_prop_int, paste0("./data/smoke/1016-countygrid_propint_wus.csv"))
+write_csv(wus_prop_int, paste0("./data/smoke/1016-countygrid_propint_us.csv"))
 
