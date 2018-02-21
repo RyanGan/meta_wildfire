@@ -1,0 +1,92 @@
+---
+title: "Regrid of 2015 population estimates to PM grid"
+output: html_notebook
+editor_options: 
+  chunk_output_type: inline
+---
+
+## Introduction
+
+This R notebook contains code to regrid the 2015 SEDAC estimates of populationto match the grid used for the kriged estimates of PM~2.5~.
+
+```{r setup}
+# libraries used
+library(tidyverse) 
+library(ncdf4) # package for working with .nc files
+library(raster) # raster package
+
+# general knitr options
+knitr::opts_chunk$set(fig.width = 7, fig.height = 5)
+```
+
+## PM~2.5~ NetCDF
+Reading in krig PM~2.5~ netcdf file. I will need this to extract the spatial coordinates for each grid point. I believe the grid resolution is 15 km^2^.
+
+```{r pm_nc_read}
+# read pm nc
+pm_nc_path <- paste0("../../data/smoke/krigedPM25_06-15/krigedPM25_2015.nc")
+pm_nc <- nc_open(pm_nc_path)
+```
+
+Extracting spatial coordinates of PM grid points.
+```{r pm_coordinates}
+# extract lat and lon
+pm_lat <- ncvar_get(nc = pm_nc, varid = "lat")
+pm_lon <- ncvar_get(nc = pm_nc, varid = "lon")
+# extract pm coords
+pm_coords <- matrix(cbind(as.vector(pm_lon), as.vector(pm_lat)), ncol=2)
+# assign longitude and latitude column names
+colnames(pm_coords) <- c("lon", "lat")
+```
+
+Viewing first 5 rows of PM point coordinates.
+```{r view_coords}
+# printing first 5 rows of coordinate matrix
+data.frame(pm_coords[1:5,])
+```
+
+Creating a dataframe to plot points.
+```{r grid_location}
+pm_grid_loc <- data.frame(pm_coords) %>% 
+  mutate(gird = "pm")
+```
+
+Extracting extent of PM grid.
+```{r pm_extent}
+# extract pm extent for point coords
+pm_e <- extent(pm_coords)
+# view extent
+pm_e
+```
+
+## Population GeoTiff
+Reading in 2015 gridded estimates of population from SEDAC. Using raster function to read in geotiff. The grid resolution is 1 km^2^
+
+```{r read_popdensity}
+# read in geotiff as a raster
+pop_2015 <- raster(paste0("../../data/shapefile/",
+  "gpw-v4-population-density-2015/gpw-v4-population-density_2015.tif"))
+```
+
+Cropping population density to continental US using the extent of the PM grid.
+```{r us_crop}
+# crop world raster to continental US extent
+us_pop_2015 <- crop(pop_2015, pm_e)
+```
+
+Extracting coordinates and population density.
+```{r extracting_raster_coords}
+# extract raster point and values
+pop_coords <- rasterToPoints(us_pop_2015)
+# name columns
+colnames(pop_coords) <- c("lon", "lat", "popden2015")
+# pop_dataframe
+pop_df <- data.frame(pop_coords)
+```
+
+Plot of population density.
+```{r density_plot}
+ggplot(pop_df, aes(x=lon,y=lat, color=popden2015)) +
+  geom_point()
+```
+
