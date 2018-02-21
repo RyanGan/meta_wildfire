@@ -52,5 +52,43 @@ grid_id_key <- data.frame(cbind(cell_id, GRID_ID)) %>%
 # grid_id_key can be used to join with shapefile
 
 # regrid irregular temp raster data -----
+# open connection to temp netcdf (may eventually itterate this for different years)
+temp_nc <- nc_open("./data/smoke/air.2m.2015.nc")
+temp_nc
 # extract lat/lon coords from temperature nc
+# extract temp lat lon
+t_lat <- ncvar_get(nc = temp_nc, var = "lat")
+t_lon <- ncvar_get(nc = temp_nc, var = "lon")
+# extract air temp for the year
+t_temp <- ncvar_get(nc  =temp_nc, var = "air")
 
+# set temp coordinates as matrix
+temp_coords <- matrix(cbind(as.vector(t_lon), as.vector(t_lat)), ncol=2)
+# set new extent
+# i need to rebuild temp raster with appropriate lat lon coords
+# set up empty extent
+e <- extent(temp_coords[,1:2])
+# create empty raster of point centroids I want to assign temp values to
+r <- raster(e, nrow=277, ncol=349)
+# new temp raster with latlon coords 
+r_temp <- rasterize(temp_coords[,1:2], r, as.vector(t_temp[,,1]), fun=mean)
+# extract values to pm points
+temp_k_regrid <- extract(r_temp, pm_coords[,2:3])
+
+# apply to each date
+test_mat <- t_temp[,,1:2]
+
+# apply function and time it
+system.time(
+  regrid_temp_mat <- apply(t_temp, 3, function(x){
+    rast_temp <- rasterize(temp_coords[,1:2], r, as.vector(x), fun=mean)
+    temp_k_regrid <- extract(rast_temp, pm_coords[,2:3])
+    return(temp_k_regrid)
+})
+)
+# i think it might be a good idea to population-weight all in the same script
+# and save the county-specific daily temperature estimates in a .nc file to save
+# space. Took about 26 minutes to regrid 1 year of temp data on my local machine
+# so for 6 years it would take over 2 hours. 
+
+summary(regrid_temp_mat)
