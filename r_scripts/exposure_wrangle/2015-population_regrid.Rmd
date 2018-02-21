@@ -1,7 +1,9 @@
 ---
 title: "Regrid of 2015 population estimates to PM grid"
-output: html_notebook
-editor_options: 
+output:
+  html_document:
+    df_print: paged
+editor_options:
   chunk_output_type: inline
 ---
 
@@ -155,6 +157,11 @@ ggplot(pop_density_grid, aes(x=lon,y=lat, color=popden2015)) +
   theme_minimal()
 ```
 
+Save dataframe. Codechunk does not evaluate since I don't want to overwrite each time file is knit.
+```{r save_df, eval=F}
+# save file
+write_csv(pop_density_grid, "../../data/smoke/2015-popdensity_us_grid.csv")
+```
 
 
 
