@@ -40,7 +40,6 @@ Extracting grid points (matrix) and setting as vectors. When using the as.vector
 ```{r assemble_grid}
 # extract longitude as a vector
 lon <- ncvar_get(smk_2015_nc, "glons")
-dim(lon)
 # extract latitude as a vector
 lat <- ncvar_get(smk_2015_nc, "glats")
 # extract date as a vector (format yyyymmdd)

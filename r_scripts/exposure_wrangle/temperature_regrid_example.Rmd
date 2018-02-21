@@ -5,7 +5,7 @@ editor_options:
   chunk_output_type: inline
 ---
 
-## Introduction
+# Introduction
 
 This R notebook contains code to regrid the NOAA reanalysis air temperature at 2 meters to match the grid used for the kriged estimates of PM~2.5~.
 
@@ -14,15 +14,14 @@ This R notebook contains code to regrid the NOAA reanalysis air temperature at 2
 library(tidyverse) 
 library(ncdf4) # package for working with .nc files
 library(raster) # raster package
-library(akima) # spatial smoothing/interpolation
+library(rgdal) # spatial transformation
 
 # general knitr options
 knitr::opts_chunk$set(fig.width = 7, fig.height = 5)
 ```
 
-### Loading NetCDF files
-
-Reading in krig PM~2.5~
+## PM~2.5~ NetCDF
+Reading in krig PM~2.5~ netcdf file.
 
 ```{r pm_nc_read}
 # read pm nc
@@ -38,17 +37,32 @@ Extract latitude and longitude coordinates for PM grid.
 # extract lat and lon
 pm_lat <- ncvar_get(nc = pm_nc, varid = "lat")
 pm_lon <- ncvar_get(nc = pm_nc, varid = "lon")
-dim(pm_lat)
+pm_val <- ncvar_get(nc = pm_nc, varid = "PM25")[,,1]
 
 # combine in dataframe
-pm_location <- as_data_frame(cbind(as.vector(pm_lon), as.vector(pm_lat))) %>% 
-  rename(lon = V1, lat = V2) %>% 
+pm_location_val <- as_data_frame(cbind(as.vector(pm_lon), as.vector(pm_lat),
+                             as.vector(pm_val))) %>% 
+  rename(lon = V1, lat = V2, pm = V3) %>% 
   mutate(grid = as.factor("pm"))
-# summary
-summary(pm_location)
 ```
 
-Temperature data from reanalysis dataset.
+### Plot of PM~2.5~ Grid
+Plotting PM~2.5~ values on 2015-01-01. Looks like there was some bad air pollution in Souther California. Projection may be a bit off, with this quick map. I'm using map outline from map package so I can't change the projection without a lot of work, but I will make sure I change the projection so that it looks correct on any final product.
+
+```{r pm_plot}
+# extract usa polygon from map package
+usa_map <- maps::map("usa")
+# plot pm values over us shape
+ggplot(pm_location_val, aes(x=lon, y=lat)) +
+  geom_point(aes(color=pm)) +
+  geom_polygon(data = usa_map, aes(x=long,y=lat, group=group), fill=NA,
+               color="red") +
+  coord_fixed(1.3) +
+  theme_minimal()
+```
+
+## Temperature NetCDF
+Reading temperature data from reanalysis netcdf file.
 
 ```{r temp}
 # temp nc_path
@@ -64,17 +78,26 @@ Extract temperature grid latitude and longitude coordinates. It looks like this 
 # extract temp lat lon
 t_lat <- ncvar_get(nc = temp_nc, var = "lat")
 t_lon <- ncvar_get(nc = temp_nc, var = "lon")
+# extract air temp on jan 1st
+t_temp <- ncvar_get(nc  =temp_nc, var = "air")[,,1]
 # combine in dataframe
-t_location <- as_data_frame(cbind(as.vector(t_lon), as.vector(t_lat))) %>% 
-  rename(lon = V1, lat = V2) %>% 
+t_location <- as_data_frame(cbind(as.vector(t_lon), as.vector(t_lat),
+                                  as.vector(t_temp))) %>% 
+  rename(lon = V1, lat = V2, temp_k = V3) %>% 
   mutate(grid = as.factor("temp"))
-# summary 
-summary(t_location)
 ```
 
-### Grid Extents
-I want to know the extent of the two grids.
+### Plot of Temperature Grid
+Plotting gridded Temperature values (in Kelvin) on 2015-01-01. The domain is so large that I can plot as points with decent enough resolution. It looks like you can see the outline of North America as the air temperature (at 2 meters) is much cooler than the air just above the oceans at lower latitudes. Cool. Also, it looks like some points are missing temp values. The longitude range also extends in to the Eastern Hemisphere. This matches what NOAA shows.
 
+https://www.esrl.noaa.gov/psd/data/narr/format.html
+```{r kelvin_plot}
+ggplot() +
+  geom_point(data = t_location, aes(x=lon,y=lat, color=temp_k), alpha= 0.8) 
+```
+
+### Plot of Grid Extents
+I want to know the extent of the two grids.
 
 Plotting the centroids of grids for the PM~2.5~ grid (red color) and the temperature grid (blue color). The temperature data extends almost to the artic circle and contains part of the eastern hemisphere. The PM grid box is only over the continental US.
 
@@ -85,21 +108,21 @@ ggplot(t_location, aes(x=lon,y=lat)) +
   theme_minimal()
 ```
 
-### Grid Centroids on Subset
+### Subset Grid Centroids 
 
 Points are hard to see on the extent map so I'm going to subset to a smaller spatial area: lat 40 to 50 degrees north, and lon -100 to -110 degrees west. Plotting centroid points of the two grids. It looks like the temperature grids are further spaced (lower resolution) compared to PM grid.
 
-```{r}
+```{r point_subset}
 # bind two grids together
-grid_loc <- rbind(pm_location, t_location)
-       
+grid_loc <- rbind(pm_location_val[,c(1:2,4)], t_location[,c(1:2,4)])
+
 # subset to a more managable viewing space
 grid_sub <- grid_loc %>% 
   filter(lon <= -100 & lon >= -110 & lat <= 50 & lat >=40)
 
 # plot
 ggplot(grid_sub, aes(x=lon,y=lat, color = grid)) +
-  geom_point(size =0.2) +
+  geom_point(size =0.5) +
   scale_color_manual(values = c("red", "blue")) +
   theme_minimal()
 ```
@@ -109,49 +132,69 @@ I will need to produce county-level estimates of temperature weighted by populat
 
 I think the interpolation method is a more accurate way to do this. I'm going to see how much time it takes to interploate 1 day of temperature values to the PM grid points. I will use the raster package and the akima package for working with gridded data and smoothing.
 
-### Temperature Raster Brick
-Start by reading in the raster brick of the temperature netcdf file. Plotting temperature on 2015-01-01. It looks like the plot shows temperature in Kelvin. Also, looks like the it was very cold in Canada and near the north pole, which is a good check.  You can also sort of see the outline of the North American continent as it's colder than sea tempeartures.
+First, I want to see if I can subset the temperature coordinates to just the extent of the PM data.
 
-```{r temp_raster}
-# create raster brick
-t_brick <- brick(temp_nc_path, varname="air")
-# plot jan 1st
-plot(t_brick[[1]])
+```{r us_temp}
+# setting lat lon bounds
+lon_min <- min(pm_location$lon)
+lon_max <- max(pm_location$lon)
+lat_min <- min(pm_location$lat)
+lat_max <- max(pm_location$lat)
+
+us_temp <- t_location %>% 
+  filter(lon >= lon_min & lon <= lon_max & lat >= lat_min & lat <= lat_max)
 ```
 
-### PM~2.5~ Raster Brick
-
-I believe only the grid centroid points are necissary for regridding. However, I want to just plot and see what's going on with PM~2.5~ on 2015-01-1. It looks like there was very high PM~2.5~ somewhere in California. This agrees with mapped AQS data from Air Now on the same date. I've also noticed that the raster projection for the PM~2.5~ raster is lat lon and the raster projection for temp appears to be in UTM (Lambert projection).
-
-```{r pm_brick}
-pm_brick <- brick(pm_nc_path, varname="PM25")
-plot(pm_brick[[1]])
+Plot of 2015-01-01 temperature for the US. Red points are the points from the PM grid I want to interpolate to.
+```{r us_temp_plot}
+ggplot(data=pm_location, aes(x=lon,y=lat)) +
+  geom_point(color="red", size=0.1) +
+  geom_point(data=us_temp, aes(x=lon,y=lat,color=temp_k), 
+             size=0.5, alpha=0.3) +
+  scale_color_gradient(low="white", high="blue") 
 ```
 
-There are plenty of points on the temperature brick that don't need to be interpolated. To speed up the process, I'm going to clip the temp brick by the raster extent of the pm grid. First, I need to make sure the raster bricks are projeciton on the same coord ref system and have the same units.
+### Creating Temperature Raster from NetCDF
 
-```{r pm_extent}
-# define wgs projection
-wgs84 <- "+proj=longlat +datum=WGS84 +ellps=WGS84 +towgs84=0,0,0"
-# assign wgs84 crs to pm_brick
-crs(pm_brick) <- wgs84
-# extent of PM values
-pm_e <- extent(pm_brick)
+The raster package can read in netcdf files, however the lambert projection was giving me troubles. It looked like it was plotting in meters rather than degrees, but I couldn't convert or transform the spatial projection and units correctly. Instead, I'm building 
 
-# temp brick is a lambert projeciton
-crs(t_brick) <- wgs84
+Going to try to use the raster package to extract values from the temperature raster to the spatial point coordinates of the PM grid.
 
-t_brick <- projectRaster(t_brick, crs = wgs84)
-# crop temp brick by pm extent
-t_brick_crop <- crop(t_brick, pm_e)
+```{r}
+# bring in temp brick
+temp_brick <- brick(temp_nc_path)
+temp_brick
 
-plot(t_brick_crop[[1]])
-temp_nc
-t_brick
-pm_brick
-test <- brick(temp_nc_path, varname ="air")
-rm(test)
+# extract pm coords
+pm_coords <- matrix(cbind(as.vector(pm_lon), as.vector(pm_lat)), ncol=2)
+
+# extract temp cooreds
+temp_coords <- matrix(cbind(as.vector(t_lon), as.vector(t_lat)), ncol=2)
+
+# i need to rebuild temp raster with appropriate lat lon coords
+# set up empty extent
+e <- extent(temp_coords[,1:2])
+e
+# create empty raster of point centroids I want to assign temp values to
+r <- raster(e, nrow=277, ncol=349)
+
+# new temp raster with latlon coords 
+r_pm <- rasterize(temp_coords[,1:2], r, as.vector(t_temp), fun=mean)
+
+# extract values to pm points
+temp_k <- extract(r_pm, pm_coords)
+
+pm_temp_test <- data.frame(cbind(pm_coords, temp_k)) %>% 
+  rename(lon = V1, lat = V2)
+
+ggplot(pm_temp_test, aes(x=lon, y=lat, color=temp_k)) +
+  geom_point()
+# this will work, now I just need to find a way to automate this process
+# if I join these values to the simple features file, will it appear smooth?
 ```
+
+
+
 
 
 
