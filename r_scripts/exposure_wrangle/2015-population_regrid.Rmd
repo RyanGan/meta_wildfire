@@ -130,7 +130,8 @@ grid_id_mat <- apply(matrix(1:58401, nrow=309, ncol=189), 2, rev)
 GRID_ID <- as.vector(grid_id_mat)
 
 # create grid id key
-grid_id_key <- data.frame(cbind(cell_id, GRID_ID)) 
+grid_id_key <- data.frame(cbind(as.vector(cell_id), as.vector(GRID_ID))) %>%
+  rename(cell_id = X1, GRID_ID = X2)
 ```
 
 Extracting population density per 15 km^2 estimates to coordinates of PM grid.
