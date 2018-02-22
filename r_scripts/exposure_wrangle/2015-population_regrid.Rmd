@@ -96,7 +96,7 @@ Now that I have coordinates for the PM grid and coordinates and population value
 I first need to create an empty raster based on the PM grid.
 ```{r empty_raster}
 # create empty raster
-pm_r <- raster(pm_e, nrow=309, ncol=189)
+pm_r <- raster(pm_e, nrow=189, ncol=309)
 # extract coordinate from geotiff
 wgs84 <- crs(us_pop_2015)
 # assign wgs84 crs to empty raster
@@ -120,12 +120,12 @@ First thing I need to do is to assign grid IDs to each cell value (variable GRID
 
 ```{r grid_id}
 # create Cell_ID key that matches the shapefile ----
-cell_id_mat <- t(apply(matrix(58401:1, nrow=309, ncol=189, byrow=T),1,rev))
+cell_id_mat <- t(apply(matrix(58401:1, nrow=189, ncol=309, byrow=T),1,rev))
 # vector of cell id
 cell_id <- as.vector(cell_id_mat)
 
 # GRID_ID matrix based on cell location
-grid_id_mat <- apply(matrix(1:58401, nrow=309, ncol=189), 2, rev)
+grid_id_mat <- apply(matrix(1:58401, nrow=189, ncol=309), 2, rev)
 # vector of GRID_ID
 GRID_ID <- as.vector(grid_id_mat)
 
