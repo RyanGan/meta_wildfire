@@ -16,5 +16,5 @@ cd /home/ryangan/local_git_repo/meta_wildfire/
 export R_LIB$=$R_LIB:/home/ryangan/R/x86_64-pc-linux-gnu-library/3.4/
 
 # run rscript
-Rscript --vanilla ./r_scripts/exposure_wrangle/1016-narr_temp
+Rscript --vanilla ./r_scripts/exposure_wrangle/1016-narr_temp_regrid_popwt.R
 
