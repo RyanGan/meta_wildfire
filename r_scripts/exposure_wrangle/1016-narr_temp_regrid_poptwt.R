@@ -110,8 +110,6 @@ temp_nc_files <- list.files("./data/smoke/air_temp_2m/")
 
 # set up cluster of 6 cores to parallelize across each .nc file
 cl <- makeCluster(6)
-# register do paralle cluster
-registerDoParallel(cl)
 
 # load packages on each processor of the node/cluster
 clusterCall(cl, function() c(library(tidyverse), library(ncdf4), 
