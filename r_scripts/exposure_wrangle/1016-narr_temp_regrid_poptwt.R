@@ -116,8 +116,8 @@ clusterCall(cl, function() c(library(tidyverse), library(ncdf4),
                              library(raster)))
 
 # export global sf objects and empty tibble to each core
-clusterExport(cl, c("temp_nc_files", "r", "temp_coords", "pm_coords",
-                    "pop_vec", "pi_mat", "popden_county_inverse", "fips"), 
+clusterExport(cl, c("temp_nc_files", "r", "temp_coords", "pm_coords", "pop_vec",
+                    "pi_mat", "popden_county_inverse", "fips", "grid_id_key"), 
               envir = .GlobalEnv)
 
 system.time( # start system time
