@@ -158,7 +158,7 @@ parSapply(cl, temp_nc_files, function(meow){
 # assign rownames and column names and create dataframe
 temp_df <- data.frame(pop_wt_temp_mat)
 # assign column names
-colnames(temp_df) <- date[1:5]
+colnames(temp_df) <- date
 # create final dataframe to write
 final_df <- cbind(fips, temp_df)
 
