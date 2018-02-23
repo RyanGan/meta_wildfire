@@ -40,10 +40,10 @@ grid_id_mat[180:189,1:10]
 # vector of GRID_ID
 GRID_ID <- as.vector(grid_id_mat)
 
-# create grid id key
+# create grid id key; I will bind regridded points to this raster
 grid_id_key <- data.frame(cbind(cell_id, GRID_ID)) %>% 
   left_join(pm_coords, by = "cell_id") %>% 
-  arrange(cell_id)
+  arrange(GRID_ID)
 
 # regrid irregular temp raster data -----
 # open connection to temp netcdf; opening to 2015 since grids are the same 
@@ -139,8 +139,10 @@ parSapply(cl, temp_nc_files, function(meow){
     pop_wt_temp_mat <- apply(temp_mat, 3, function(x){
       # regrid temp raster 
       rast_temp <- rasterize(temp_coords[,1:2], r, as.vector(x), fun=mean)
-      # extract values from raster to pm coordinates
-      temp_k_regrid <- extract(rast_temp, pm_coords[,2:3])
+      # extract values from raster to grid_id coordinates
+      # I sorted coordinates by GRID_ID to match the population density and
+      # proportion intersect ids
+      temp_k_regrid <- extract(rast_temp, grid_id_key[,3:4])
       
       # population weigting
       # multiply population vector by regridded temp vector
@@ -151,6 +153,7 @@ parSapply(cl, temp_nc_files, function(meow){
       # multiple county summed temp values by inverse of county population density
       # produces county population weighted temp estimates f
       county_popwt_temp <- county_temp_sum_mat * as.vector(popden_county_inverse)
+      # return county population-weight temp
       return(county_popwt_temp)
     }
   ) # end inner function
