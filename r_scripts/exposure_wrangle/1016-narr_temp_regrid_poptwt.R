@@ -163,7 +163,8 @@ colnames(temp_df) <- date
 final_df <- cbind(fips, temp_df)
 
 # write name 
-write_name <- paste0("./data/smoke/air_temp_2m/",year,"-county_popwt_temp.csv")
+write_name <- paste0("./data/smoke/air_temp_2m/county_air_temp/",
+                     year,"-county_popwt_temp.csv")
 # write final dataset to air temp file
 write_csv(final_df, path = write_name)
 
@@ -178,4 +179,4 @@ nc_close(temp_nc)
 stopCluster(cl)
 
 # check to see if files were created
-list.files("./data/smoke/air_temp_2m/", pattern = ".csv")
+list.files("./data/smoke/air_temp_2m/county_air_temp/", pattern = ".csv")
