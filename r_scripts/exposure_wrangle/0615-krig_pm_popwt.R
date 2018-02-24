@@ -165,7 +165,7 @@ parSapply(cl, pm_nc_files, function(meow){
   })
   
 # close nc connection
-nc_close(temp_nc)
+nc_close(pm_nc)
  } # end sapply funciton
 ) # end s apply
 # side note: one day I should put all these estimates in to a database
