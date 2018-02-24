@@ -20,8 +20,9 @@ prop_int <- read_csv("./data/smoke/1016-countygrid_propint_us.csv",
                      col_types = cols(.default = "c")) %>% 
   mutate_all(funs(as.numeric))
 
-# proportion intersect matrix
-pi_mat <- as.matrix(prop_int[,2:415])
+prop_int[1:10,1:10]
+# proportion intersect matrix; remove grid id
+pi_mat <- as.matrix(prop_int[,-1])
 # assign grid name as row name
 rownames(pi_mat) <- prop_int$GRID_ID
 
@@ -37,10 +38,14 @@ pop_vec <- popden2015$popden2015
 # estimating county population density and inverse for use in formula
 # estimate of population density per county
 popden_county <- t(pi_mat) %*% pop_vec
+
+# check king county population 
+# king <- popden_county[which(rownames(popden_county)=="fips_53033")]*(15^2)
+# king # in the ball park
 # calcuate the inverse of county population density
 popden_county_inverse <- 1/popden_county
 
-# extract fips names
+# extract fips names 
 fips <- substr(colnames(prop_int)[-1], 6, 10)
 
 # open nc connection to pm grid -----
@@ -78,74 +83,93 @@ grid_id_key <- data.frame(cbind(cell_id, GRID_ID)) %>%
 
 # prep to make sure grids line up correctly
 # extract vector of arranged WRFGRID IDs that match cell IDs for rownames
-GRID_ID <- arrange(grid_id_key, id)$GRID_ID
+GRID_ID <- arrange(grid_id_key, cell_id)$GRID_ID
 
-# i think the loop should start here
-# output 3d arrays from .nc files ----
-krig_pm <- ncvar_get(pm_nc, varid = "PM25")
-bg_pm <- ncvar_get(pm_nc, varid = "Background PM25")
-hms_smk <- ncvar_get(pm_nc, varid = "HMS Smoke")
+# population weighting of pm ---------------------------------------------------
+# itterate through nc files, opening one at a time
+pm_nc_files <- list.files("./data/smoke/krigedPM25_06-15/", pattern=".nc")
 
-# kates date in the .nc file is just one value; i'm just going to create
-# my own date vector that will account for leap year too
-year <- "2015"
-date <- paste0("d", gsub("-", "", 
-  seq.Date(from = as.Date(paste0(year, "-01-01")), 
-    to = as.Date(paste0(year, "-12-31")), by = "day"))) # end date seq
+# set up cluster of 6 cores to parallelize across each .nc file
+cl <- makeCluster(8)
 
-# convert pm2.5 to 2d matrix
-pm_mat <- apply(krig_pm, 3, as.vector)
-bg_pm_mat <- apply(bg_pm, 3, as.vector)
-hms_mat <- apply(hms_smk, 3, as.vector)
+# load packages on each processor of the node/cluster
+clusterCall(cl, function() c(library(tidyverse), library(ncdf4)))
 
-# bind in to a list to itterate through population weighting function
-pm_list <- list(pm_mat, bg_pm_mat, hms_mat)
-# assign names to list elements
-names(pm_list) <- c("krig_pm", "background_pm", "hms_smk")
+# export global sf objects and empty tibble to each core
+clusterExport(cl, c("pm_nc_files", "GRID_ID", "pop_vec", "pi_mat", 
+                    "popden_county_inverse", "fips", "grid_id_key"), 
+              envir = .GlobalEnv)
 
-# lapply row and column names and sort by GRID_ID Cell
-pm_list <- lapply(pm_list, function(x){
-  colnames(x) <- date
-  rownames(x) <- GRID_ID
-  x <- x[order(as.numeric(row.names(x))),]
-})
+start <- Sys.time()
+# parallel s apply ----
+parSapply(cl, pm_nc_files, function(meow){
+  # open nc connection
+  pm_nc <- nc_open(paste0("./data/smoke/krigedPM25_06-15/", meow))
+  # output 3d arrays from .nc files ----
+  krig_pm <- ncvar_get(pm_nc, varid = "PM25")
+  bg_pm <- ncvar_get(pm_nc, varid = "Background PM25")
+  hms_smk <- ncvar_get(pm_nc, varid = "HMS Smoke")
 
-pm_list[[1]][1:10,1:10]
+  # extract year from name of list
+  year <- substring(meow, 12, 15)
 
-popwt_pm_list <- lapply(pm_list, function(x){
-  # multiply population vector by pm matrices
-  pm_pop_mat <- pop_vec * x
-  # multiply pm population matrix by county/grid intersection matrix 
-  # produces a summed estimate of pm values in a county for each day
-  county_pm_sum_mat <- t(pi_mat) %*% pm_pop_mat
-  # multiple county summed PM values by inverse of county population density
-  # produces county population weighted PM estimates for each day
-  county_popwt_pm <- county_pm_sum_mat * as.vector(popden_county_inverse)
+  # kates date in the .nc file is just one value; i'm just going to create
+  # my own date vector that will account for leap year too
+  date <- paste0("d", gsub("-", "", 
+    seq.Date(from = as.Date(paste0(year, "-01-01")), 
+      to = as.Date(paste0(year, "-12-31")), by = "day"))) # end date seq
   
-  # create dataframe and join in FIPS id
-  pm_county_wt <- as_data_frame(cbind(fips, county_popwt_pm)) %>% 
-    # convert characters to numeric
-    mutate_at(vars(-fips), funs(as.numeric))
-  # return dataframe
-  return(pm_county_wt)
-})
+  # convert pm2.5 to 2d matrix
+  pm_mat <- apply(krig_pm, 3, as.vector)
+  bg_pm_mat <- apply(bg_pm, 3, as.vector)
+  hms_mat <- apply(hms_smk, 3, as.vector)
 
+  # bind in to a list to itterate through population weighting function
+  pm_list <- list(pm_mat, bg_pm_mat, hms_mat)
+  # assign names to list elements
+  names(pm_list) <- c("krig_pm", "background_pm", "hms_smk")
 
-# population weighting for each 
-# multiply population vector by regridded environmental vector
-e_pop_vec <- pop_vec * pm_mat
-# multiply population matrix by county/grid intersection matrix 
-# produces a summed estimate of temp values 
-county_e_sum_mat <- t(pi_mat) %*% e_pop_vec
-# multiple county summed temp values by inverse of county population density
-# produces county population weighted temp estimates f
-county_popwt_e <- county_e_sum_mat * as.vector(popden_county_inverse)
+  # lapply row and column names and sort by GRID_ID Cell
+  pm_list <- lapply(pm_list, function(x){
+    colnames(x) <- date
+    rownames(x) <- GRID_ID
+    x <- x[order(as.numeric(row.names(x))),]
+  })
 
-# hms smoke
-s_pop_vec <- pop_vec * hms_mat
-c_s_sum_mat <- t(pi_mat) %*% s_pop_vec
-county_popwt_s <- c_s_sum_mat * as.vector(popden_county_inverse)
+    # should i build this list? and then write?
+    popwt_pm_list <- lapply(pm_list, function(x){
+      # multiply population vector by pm matrices
+      pm_pop_mat <- pop_vec * x
+      # multiply pm population matrix by county/grid intersection matrix 
+      # produces a summed estimate of pm values in a county for each day
+      county_pm_sum_mat <- t(pi_mat) %*% pm_pop_mat
+      # multiple county summed PM values by inverse of county population density
+      # produces county population weighted PM estimates for each day
+      county_popwt_pm <- county_pm_sum_mat * as.vector(popden_county_inverse)
+      
+      # create dataframe and join in FIPS id
+      pm_county_wt <- as_data_frame(cbind(fips, county_popwt_pm)) %>% 
+        # convert characters to numeric
+        mutate_at(vars(-fips), funs(as.numeric))
+      # return dataframe
+      return(pm_county_wt)
+    }) # end inner apply function
 
-county_popwt_s[1:10,1:10]
-
+  # writing lapply to write all files in the population wt list 
+  lapply(1:length(popwt_pm_list), function(x){
+    # write_name
+    write_name <- paste0("./data/smoke/krigedPM25_06-15/krig_county_popwt/",
+          year, "-krig_county_popwt_", names(popwt_pm_list[x]),".csv")
+    # save csv file
+    write_csv(popwt_pm_list[[x]], write_name)
+  })
+  
+# close nc connection
+nc_close(temp_nc)
+ } # end sapply funciton
+) # end s apply
 # side note: one day I should put all these estimates in to a database
+
+stop <- Sys.time()
+runtime <- stop - start
+runtime
