@@ -156,5 +156,5 @@ morbidity_ts <- bind_rows(co_ts, wa_ts) %>%
 # health outcomes data for
 glimpse(morbidity_ts)
 # write file
-write_csv(morbidity_ts, "./data/health/1015-morbidity_ts.csv")
+write_csv(morbidity_ts, "./data/health/1015-morbidity_pm_ts.csv")
 
