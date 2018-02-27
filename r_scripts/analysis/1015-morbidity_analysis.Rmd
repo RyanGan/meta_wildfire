@@ -20,7 +20,7 @@ knitr::opts_chunk$set(fig.height = 6, fig.width = 8, fig.align = "center",
                       results = "asis")
 # libraries
 library(tidyverse)
-library(sf)
+# library(sf)
 ```
 
 Setting up dark color theme.
@@ -104,6 +104,7 @@ Bind envrionmental data frames together as a time series data frame. I'm also cr
 county_pm_ts <- list(krig_pm, bg_pm, hms, temp) %>% 
   reduce(function(df1,df2)left_join(df1,df2, by = c("fips", "date"))) %>% 
   mutate(pm_krig = ifelse(pm_krig < 0, 0, pm_krig),
+         pm_smk = iflese(pm_krig - bg_pm > 0, pm_krig - bg_pm, 0),
          smoke0 = ifelse(pm_krig - bg_pm > 0, 1, 0),
          smoke5 = ifelse(pm_krig - bg_pm > 5, 1, 0), 
          smoke10 = ifelse(pm_krig - bg_pm > 10, 1, 0),
@@ -135,9 +136,68 @@ state_ts <- county_pm_ts %>%
 
 
 ```{r}
-ggplot(state_ts, aes(x=date, y=temp_med)) +
+ggplot(state_ts, aes(x=date, y=smkwv_sum)) +
   geom_point() +
   facet_wrap(~state)
 ```
 
+### Import County-Level Morbidity Counts
+Importing Washington 2011 to 2015 time series.
+
+```{r washington_import}
+# define relative path
+wa_path <- paste0("../../data/health/2011-2015_morbidity_wa_ts.csv")
+# read in dataframe
+wa_ts <- read_csv(wa_path, progress = F) %>% 
+  mutate(fips = as.character(fips))
+```
+
+```{r colorado_import}
+# define relative path to data folder
+co_path <- paste0("../../data/health/2010-2015_morbidity_co_ts.csv")
+# read in dataframe using read_csv function from tidyverse package
+co_ts <- read_csv(co_path, progress = F) 
+```
+
+```{r read_denom}
+# colorado census
+co_denom <- read_csv("../../data/census/2016-colorado_population.csv") %>% 
+  select(GEO.id2, 'GEO.display-label', respop72010:respop72016) %>% 
+  rename(fips = GEO.id2, county = 'GEO.display-label') %>% 
+  rename_at(vars(respop72010:respop72016), 
+            funs(paste0("pop",str_sub(., start=8)))) %>% 
+  # take out state name and "county" from county name
+  mutate(county = str_split_fixed(county, " County", n=2)[,1])
+# sum up counties to get a state total
+co_denom_total <- co_denom %>% 
+  summarise_at(vars(pop2010:pop2016), sum) %>% 
+  gather(key="year", value = "pop", pop2010:pop2016) %>% 
+  mutate(year = as.numeric(str_sub(year, start = 4)))
+
+# washington cesus
+wa_denom <- read_csv("../../data/census/2016-washington_population.csv") %>% 
+  select(GEO.id2, 'GEO.display-label', respop72010:respop72016) %>% 
+  rename(fips = GEO.id2, county = 'GEO.display-label') %>% 
+  rename_at(vars(respop72010:respop72016), 
+            funs(paste0("pop",str_sub(., start=8)))) %>% 
+  # take out state name and "county" from county name
+  mutate(county = str_split_fixed(county, " County", n=2)[,1])
+# sum up counties to get a state total
+wa_denom_total <- wa_denom %>% 
+  summarise_at(vars(pop2010:pop2016), sum) %>% 
+  gather(key="year", value = "pop", pop2010:pop2016) %>% 
+  mutate(year = as.numeric(str_sub(year, start = 4)))
+```
+
+I think I want to move all this code (health and exposure time series) to its own script where I make the analysis dataset.
+
 Note: Change the name and just do the full time series analysis here.
+
+```{r analysis_df}
+total_ts <- co_ts %>% 
+  bind_rows(wa_ts) %>% 
+  filter(strata == "total") %>% 
+  left_join(county_pm_ts, by = c("date", "fips")) 
+
+```
+
