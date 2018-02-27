@@ -1,0 +1,143 @@
+---
+title: "Exploring County-Level Population-Weighted PM~2.5~"
+author: "Ryan Gan"
+date: "2018-02-26"
+output: html_notebook
+editor_options: 
+  chunk_output_type: inline
+---
+
+## Introduction
+I have population-weighted PM~2.5~ values provided by Kate and air temperature at 2 meters values downloaded from the NCEP/NCARR reanalysis data sets. This seemed like a reasonable height; other options would be surface temperature. Both estimates were population-weighted to the county level using 2015 population density estimates from SEDAC (version 4). Right now, I only have counties for the Western US, but could produce estimates for the entire continental US.
+
+I have PM~2.5~ estimates from 2006-2015. I will only use 2010 to 2015, which are the years I have health outcomes data. I only downloaded the 2010 to 2015 temperature estimates.
+
+Setting up R Notebook knit options and libraries
+```{r kniter_opt}
+# knitr options
+knitr::opts_chunk$set(fig.height = 6, fig.width = 8, fig.align = "center",
+                      progress = F, message = F, warning = F, echo=F,
+                      results = "asis")
+# libraries
+library(tidyverse)
+library(sf)
+```
+
+Setting up dark color theme.
+```{r ggtheme}
+ryan_theme <- theme(panel.background = element_rect(fill = "black", 
+          colour = "black", size = 0.5, linetype = "solid"),
+        panel.grid.major = element_line(size = 0.2, colour = "white"),
+        panel.grid.minor = element_line(size = 0.1, color = "white", 
+                                        linetype = "dotted"),
+        plot.background = element_rect(fill = "#141e30", colour="#141e30",
+                                       size = 0.5, linetype = "solid"),
+        text = element_text(colour = "white"),
+        axis.text = element_text(colour = "white"),
+        strip.background = element_blank(),
+        strip.text = element_text(colour="white"),
+        legend.background = element_blank(),
+        legend.key = element_blank())
+```
+
+## Data Import and Wrangle
+I left datasets as individual years with county FIPS as row observations and date as columns. They need to be wrangled in to a time series to be used for analysis. I'm going to subset to 2010 to 2015 and Washington and Colorado for now. Starting by importing PM~2.5~. 
+
+```{r pm_import}
+# pm file path
+pm_file_path <- paste0("../../data/smoke/krig_county_popwt/")
+# importing pm2.5 data 2010 to 2015
+# krig pm  dataframe
+krig_pm <- (list.files(pm_file_path, pattern="krig_pm")[5:10]) %>%  
+  # read in each csv file
+  map(~read_csv(paste0(pm_file_path, .))) %>% 
+  # transform data wide to long and retain only colorado and washington fips
+  # bind them in a list
+  map_dfr(~ filter(., str_sub(fips, start=1,end=2) %in% c("08", "53")) %>% 
+        gather(date, pm_krig, -fips) %>% 
+        mutate(date = as.Date(str_sub(date, start=2), format="%Y%m%d"))) 
+```
+
+Importing background PM~2.5~.
+```{r background_import}
+# background pm
+bg_pm <- (list.files(pm_file_path, pattern="background_pm")[5:10]) %>% 
+  # read in each csv file
+  map(~read_csv(paste0(pm_file_path, .))) %>% 
+  # transform data wide to long and retain only colorado and washington fips
+  # bind them in a list
+  map_dfr(~ filter(., str_sub(fips, start=1,end=2) %in% c("08", "53")) %>% 
+        gather(date, bg_pm, -fips) %>% 
+        mutate(date = as.Date(str_sub(date, start=2), format="%Y%m%d"))) 
+```
+
+HMS smoke county proportion (weighted from binary 1 or 0) import.
+```{r hms_import}
+# hms county proportion
+hms <- (list.files(pm_file_path, pattern="hms")[5:10]) %>% 
+  # read in each csv file
+  map(~read_csv(paste0(pm_file_path, .))) %>% 
+  # transform data wide to long and retain only colorado and washington fips
+  # bind them in a list
+  map_dfr(~ filter(., str_sub(fips, start=1,end=2) %in% c("08", "53")) %>% 
+        gather(date, hms, -fips) %>% 
+        mutate(date = as.Date(str_sub(date, start=2), format="%Y%m%d")))
+```
+
+Import reanalysis temperature and create new variable for degrees in Farenheit.
+
+```{r temp_import}
+# read in temp data
+temp <- list.files(paste0("../../data/smoke/county_air_temp/")) %>% 
+  map(~read_csv(paste0("../../data/smoke/county_air_temp/", .))) %>% 
+  # transform data wide to long and retain only colorado and washington fips
+  # bind them in a list
+  map_dfr(~ filter(., str_sub(fips, start=1,end=2) %in% c("08", "53")) %>% 
+        gather(date, temp_k, -fips) %>% 
+        mutate(date = as.Date(str_sub(date, start=2), format="%Y%m%d"),
+               temp_f = round(temp_k * (9/5) - 459.67, 2)))
+```
+
+Bind envrionmental data frames together as a time series data frame. I'm also creating binary smoke variables, including the smoke-wave variable, which is two days of PM~2.5~ over the 98^th^ percentile of 22.31 ug/m^3^ for the Western US counties.
+```{r bind_env_df}
+# join all exposure values by fips and date
+county_pm_ts <- list(krig_pm, bg_pm, hms, temp) %>% 
+  reduce(function(df1,df2)left_join(df1,df2, by = c("fips", "date"))) %>% 
+  mutate(pm_krig = ifelse(pm_krig < 0, 0, pm_krig),
+         smoke0 = ifelse(pm_krig - bg_pm > 0, 1, 0),
+         smoke5 = ifelse(pm_krig - bg_pm > 5, 1, 0), 
+         smoke10 = ifelse(pm_krig - bg_pm > 10, 1, 0),
+         smoke15 = ifelse(pm_krig - bg_pm > 15, 1, 0),
+         state = ifelse(str_sub(fips, start = 1, end = 2) == "08",
+                        "colorado", "washington")) %>% 
+  # create smoke wave (98th perctile for 2 days)
+  group_by(fips) %>% 
+  arrange(fips, date) %>% 
+  mutate(high_pm_day = ifelse(pm_krig >= 22.31, 1, 0),
+         smoke_wave = ifelse(lag(high_pm_day, order_by = fips)==1 &
+                               high_pm_day==1, 1, 0))
+```
+
+## State Trends in PM~2.5~ and Temperature
+Aggregateing Colorado and Washington to look at trends over the 6 year period.
+
+```{r state_ts}
+state_ts <- county_pm_ts %>% 
+  group_by(state, date) %>% 
+  summarise(pm_mean = mean(pm_krig), pm_med = median(pm_krig), 
+    pm_min = min(pm_krig), pm_max = max(pm_krig), bg_mean = mean(bg_pm), 
+    bg_min = min(bg_pm), bg_max = max(bg_pm), hms_mean = mean(hms), 
+    hms_min = min(hms), hmx_max = max(hms), smk10_sum = sum(smoke10), 
+    smk15_sum = sum(smoke15), smkwv_sum = sum(smoke_wave), 
+    temp_mean = mean(temp_f), temp_med = median(temp_f), 
+    temp_min = min(temp_f), temp_max = max(temp_f))
+```
+
+
+```{r}
+ggplot(state_ts, aes(x=date, y=temp_med)) +
+  geom_point() +
+  facet_wrap(~state)
+```
+
+Note: Change the name and just do the full time series analysis here.
