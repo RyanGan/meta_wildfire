@@ -78,7 +78,7 @@ clusterExport(cl, c("ts_lag", "smk_matrix", "outcomes"),
 # start time
 start <- Sys.time()
 # distributed lag function
-smoke10_dl_results <- parSpply(cl, outcomes, function(x){
+smoke10_dl_results <- parSapply(cl, outcomes, function(x){
   outcome <- x
   # define basis b using natural spline function
   smk_b <- ns(0:(ncol(smk_matrix)-1), df = 3, intercept = T)
