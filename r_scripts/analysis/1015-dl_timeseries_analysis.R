@@ -36,7 +36,7 @@ outcomes <- c("resp", "asthma", "copd", "acute_bronch", "pneum", "cvd",
 county_pm_ts <- read_csv("./data/smoke/1015-county_popwt_pm.csv")
 
 # binary smoke lagged dataframe
-smoke15_lag <- county_pm_ts %>% 
+smoke10_lag <- county_pm_ts %>% 
   filter(str_sub(fips,start=1,end=2) %in% c("08", "53")) %>% 
   select(fips, date, smoke10) %>% 
   arrange(fips, date) %>% 
