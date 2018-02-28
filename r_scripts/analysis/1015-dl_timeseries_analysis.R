@@ -77,9 +77,10 @@ clusterExport(cl, c("ts_lag", "smk_matrix", "outcomes"),
 # Distributed lag association for smoke10 --------------------------------------
 # start time
 start <- Sys.time()
+
 # distributed lag function
-smoke10_dl_results <- parSapply(cl, outcomes, function(x){
-  outcome <- x
+smoke10_dl_results <- parLapply(cl, outcomes, function(x){
+  outcome <- as.character(x)
   # define basis b using natural spline function
   smk_b <- ns(0:(ncol(smk_matrix)-1), df = 3, intercept = T)
   # multiply lagged pm matrix by basis
@@ -89,7 +90,7 @@ smoke10_dl_results <- parSapply(cl, outcomes, function(x){
       "~smk_basis+weekend+month+year+state+(1|fips)+offset(log(population))")),
                family = "poisson"(link="log"), data = ts_lag,
                control = glmerControl(optimizer = "bobyqa"))
-  
+
   # calculate estimates ----
   # output pm basis parameters
   dl_parms <- broom::tidy(mod) %>% 
@@ -135,17 +136,17 @@ smoke10_dl_results <- parSapply(cl, outcomes, function(x){
   c_upper95 <- cumulative_estimate+(cumulative_se*qnorm(0.975))
   # return dataframe
   c_estimate <- data.frame(outcome, c_type, time,
-                           exp(cumulative_estimate), exp(c_lower95), exp(c_upper95))
+                     exp(cumulative_estimate), exp(c_lower95), exp(c_upper95))
   # assign column names
   colnames(c_estimate) <- c("outcome", "type","time","estimate",
                             "lower95","upper95") 
-  
   # bind lag and cumulative estimates together
   return_estimate <- rbind(c_estimate, l_estimate)
   # return estimate  
   return(return_estimate)
-} # end of function
-) # end parSapply
+  }) %>%   # end parLapply
+  # bind to dataframe
+  plyr::rbind.fill()
 
 # stop time
 stop <- Sys.time()
