@@ -46,14 +46,20 @@ Read in time series dataframe that contains Colorado and Washington counts and P
 
 ```{r data_import}
 ts <- read_csv("../../data/health/1015-morbidity_pm_ts.csv") %>% 
-  filter(!is.na(pm_krig))
+  filter(!is.na(pm_krig)) %>% 
+  mutate(month = lubridate::month(date),
+         year = lubridate::year(date),
+         season = case_when(month %in% c(12, 1, 2) ~ "winter",
+                            month %in% c(3:5) ~ "spring",
+                            month %in% c(6:8) ~ "summer",
+                            month %in% c(9:11)~ "fall"))
 ```
 
 Same-day association.
 ```{r}
 spl <- ns(ts$date, df = 35)
 # random effects mod
-mod <- glmer(asthma ~ pm_smk + temp_f + spl + 
+mod <- glmer(asthma ~ smoke_wave + temp_f +  
                (1|fips) + offset(log(population)), 
              family = "poisson"(link="log"), data = ts,
              control = glmerControl(optimizer = "bobyqa"))
@@ -62,7 +68,8 @@ summary(mod)
 summary(ts)
 
 # glm mod
-mod2 <- glm(asthma ~ smoke15 + spl + offset(log(population)), 
+mod2 <- glm(cvd ~ smoke_wave + temp_f + state + month + year + fips +
+              offset(log(population)), 
             family = "poisson"(link="log"), data = ts)
 
 summary(mod2)
@@ -116,14 +123,64 @@ I think I need to move the more complicated models over to the server, save the 
 
 Denver County
 ```{r}
+# denver county complete case
 denver <- ts %>% filter(fips == "08031") %>% 
-  mutate(month = lubridate::month(date))
+  mutate(month = lubridate::month(date)) %>% 
+  filter(complete.cases(.))
 
-head(denver)
-ggplot(denver, aes(x=date, y=resp)) +
-  geom_point()
+# spline
+spl <- ns(denver$date, df = 30)
+# predict pm
+pm_mod <- lm(pm_krig ~ spl, data = denver)
+# predicted pm
+pm_pred <- predict(pm_mod, type="response")
+# bind to denver
+denver_pred_pm <- denver %>% 
+  cbind(., pm_pred)
 
-mod <- glm(resp ~ pm_smk + temp_f, family="poisson"(link="log"), data = denver)
+ggplot(denver_pred_pm, aes(x=date, y=pm_krig)) +
+  geom_point() +
+  geom_line(aes(x=date, y=pm_pred), color = "red")
+
+# simple mod
+mod <- glm(resp ~ pm_krig + smoke5 + pm_krig*smoke5 + temp_f + spl, 
+           family="poisson"(link="log"), data = denver)
 summary(mod)
+
+mod2 <- glm(resp ~ pm_krig + spl, 
+           family="poisson"(link="log"), data = denver)
+summary(mod2)
 ```
 
+```{r larimer}
+chelan <- ts %>% filter(fips == "53007") %>% 
+  mutate(month = lubridate::month(date)) %>% 
+  filter(complete.cases(.)) %>% 
+  filter(year == 2012)
+
+# spline
+spl <- ns(chelan$date, df = 13)
+# predict pm
+pm_mod <- lm(pm_krig ~ spl, data = chelan)
+# predicted pm
+pm_pred <- predict(pm_mod, type="response")
+# bind to denver
+c_pred_pm <- chelan %>% 
+  cbind(., pm_pred)
+
+ggplot(c_pred_pm, aes(x=date, y=pm_krig)) +
+  geom_point() +
+  geom_line(aes(x=date, y=pm_pred), color = "red")
+
+# simple mod
+mod <- glm(asthma ~ smoke_wave + temp_f + as.factor(month), 
+           family="poisson"(link="log"), data = chelan)
+summary(mod)
+
+ggplot(chelan, aes(x=date, y=resp)) +
+  geom_point()
+```
+
+Problem Identified: When I include the full year, there are going to be PM levels that meet a definition above PM estimate - background that is not really due to smoke. Solution to this would be to look only in certain months (i.e. wildfire season), or include interaction term where a binary smoke variable is created (I've added additional month criteria).
+
+I think I might need to go with the timestrat casecross design.
