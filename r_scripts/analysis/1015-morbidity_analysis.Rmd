@@ -20,7 +20,8 @@ knitr::opts_chunk$set(fig.height = 6, fig.width = 8, fig.align = "center",
                       results = "asis")
 # libraries
 library(tidyverse)
-# library(sf)
+library(lme4) # loading lme4 mixed model package
+library(splines) # splines package
 ```
 
 Setting up dark color theme.
@@ -41,163 +42,88 @@ ryan_theme <- theme(panel.background = element_rect(fill = "black",
 ```
 
 ## Data Import and Wrangle
-I left datasets as individual years with county FIPS as row observations and date as columns. They need to be wrangled in to a time series to be used for analysis. I'm going to subset to 2010 to 2015 and Washington and Colorado for now. Starting by importing PM~2.5~. 
+Read in time series dataframe that contains Colorado and Washington counts and PM~2.5~ concentrations.
 
-```{r pm_import}
-# pm file path
-pm_file_path <- paste0("../../data/smoke/krig_county_popwt/")
-# importing pm2.5 data 2010 to 2015
-# krig pm  dataframe
-krig_pm <- (list.files(pm_file_path, pattern="krig_pm")[5:10]) %>%  
-  # read in each csv file
-  map(~read_csv(paste0(pm_file_path, .))) %>% 
-  # transform data wide to long and retain only colorado and washington fips
-  # bind them in a list
-  map_dfr(~ filter(., str_sub(fips, start=1,end=2) %in% c("08", "53")) %>% 
-        gather(date, pm_krig, -fips) %>% 
-        mutate(date = as.Date(str_sub(date, start=2), format="%Y%m%d"))) 
+```{r data_import}
+ts <- read_csv("../../data/health/1015-morbidity_pm_ts.csv") %>% 
+  filter(!is.na(pm_krig))
 ```
 
-Importing background PM~2.5~.
-```{r background_import}
-# background pm
-bg_pm <- (list.files(pm_file_path, pattern="background_pm")[5:10]) %>% 
-  # read in each csv file
-  map(~read_csv(paste0(pm_file_path, .))) %>% 
-  # transform data wide to long and retain only colorado and washington fips
-  # bind them in a list
-  map_dfr(~ filter(., str_sub(fips, start=1,end=2) %in% c("08", "53")) %>% 
-        gather(date, bg_pm, -fips) %>% 
-        mutate(date = as.Date(str_sub(date, start=2), format="%Y%m%d"))) 
-```
-
-HMS smoke county proportion (weighted from binary 1 or 0) import.
-```{r hms_import}
-# hms county proportion
-hms <- (list.files(pm_file_path, pattern="hms")[5:10]) %>% 
-  # read in each csv file
-  map(~read_csv(paste0(pm_file_path, .))) %>% 
-  # transform data wide to long and retain only colorado and washington fips
-  # bind them in a list
-  map_dfr(~ filter(., str_sub(fips, start=1,end=2) %in% c("08", "53")) %>% 
-        gather(date, hms, -fips) %>% 
-        mutate(date = as.Date(str_sub(date, start=2), format="%Y%m%d")))
-```
-
-Import reanalysis temperature and create new variable for degrees in Farenheit.
-
-```{r temp_import}
-# read in temp data
-temp <- list.files(paste0("../../data/smoke/county_air_temp/")) %>% 
-  map(~read_csv(paste0("../../data/smoke/county_air_temp/", .))) %>% 
-  # transform data wide to long and retain only colorado and washington fips
-  # bind them in a list
-  map_dfr(~ filter(., str_sub(fips, start=1,end=2) %in% c("08", "53")) %>% 
-        gather(date, temp_k, -fips) %>% 
-        mutate(date = as.Date(str_sub(date, start=2), format="%Y%m%d"),
-               temp_f = round(temp_k * (9/5) - 459.67, 2)))
-```
-
-Bind envrionmental data frames together as a time series data frame. I'm also creating binary smoke variables, including the smoke-wave variable, which is two days of PM~2.5~ over the 98^th^ percentile of 22.31 ug/m^3^ for the Western US counties.
-```{r bind_env_df}
-# join all exposure values by fips and date
-county_pm_ts <- list(krig_pm, bg_pm, hms, temp) %>% 
-  reduce(function(df1,df2)left_join(df1,df2, by = c("fips", "date"))) %>% 
-  mutate(pm_krig = ifelse(pm_krig < 0, 0, pm_krig),
-         pm_smk = iflese(pm_krig - bg_pm > 0, pm_krig - bg_pm, 0),
-         smoke0 = ifelse(pm_krig - bg_pm > 0, 1, 0),
-         smoke5 = ifelse(pm_krig - bg_pm > 5, 1, 0), 
-         smoke10 = ifelse(pm_krig - bg_pm > 10, 1, 0),
-         smoke15 = ifelse(pm_krig - bg_pm > 15, 1, 0),
-         state = ifelse(str_sub(fips, start = 1, end = 2) == "08",
-                        "colorado", "washington")) %>% 
-  # create smoke wave (98th perctile for 2 days)
-  group_by(fips) %>% 
-  arrange(fips, date) %>% 
-  mutate(high_pm_day = ifelse(pm_krig >= 22.31, 1, 0),
-         smoke_wave = ifelse(lag(high_pm_day, order_by = fips)==1 &
-                               high_pm_day==1, 1, 0))
-```
-
-## State Trends in PM~2.5~ and Temperature
-Aggregateing Colorado and Washington to look at trends over the 6 year period.
-
-```{r state_ts}
-state_ts <- county_pm_ts %>% 
-  group_by(state, date) %>% 
-  summarise(pm_mean = mean(pm_krig), pm_med = median(pm_krig), 
-    pm_min = min(pm_krig), pm_max = max(pm_krig), bg_mean = mean(bg_pm), 
-    bg_min = min(bg_pm), bg_max = max(bg_pm), hms_mean = mean(hms), 
-    hms_min = min(hms), hmx_max = max(hms), smk10_sum = sum(smoke10), 
-    smk15_sum = sum(smoke15), smkwv_sum = sum(smoke_wave), 
-    temp_mean = mean(temp_f), temp_med = median(temp_f), 
-    temp_min = min(temp_f), temp_max = max(temp_f))
-```
-
-
+Same-day association.
 ```{r}
-ggplot(state_ts, aes(x=date, y=smkwv_sum)) +
-  geom_point() +
-  facet_wrap(~state)
+spl <- ns(ts$date, df = 35)
+# random effects mod
+mod <- glmer(asthma ~ pm_smk + temp_f + spl + 
+               (1|fips) + offset(log(population)), 
+             family = "poisson"(link="log"), data = ts,
+             control = glmerControl(optimizer = "bobyqa"))
+
+summary(mod)
+summary(ts)
+
+# glm mod
+mod2 <- glm(asthma ~ smoke15 + spl + offset(log(population)), 
+            family = "poisson"(link="log"), data = ts)
+
+summary(mod2)
 ```
 
-### Import County-Level Morbidity Counts
-Importing Washington 2011 to 2015 time series.
+Predict time-series.
+```{r}
+# define degrees of freedom
+spl_df <- 30:35
 
-```{r washington_import}
-# define relative path
-wa_path <- paste0("../../data/health/2011-2015_morbidity_wa_ts.csv")
-# read in dataframe
-wa_ts <- read_csv(wa_path, progress = F) %>% 
-  mutate(fips = as.character(fips))
+# fit spline by date
+spline_fits <- spl_df %>% 
+  map_dfr(function(df_val){
+    date <- ts$date
+    # run spline based on date sequence
+    spl <- ns(date, df = df_val)
+    # model gwr_smoke units regressed on the spline
+    pm_mod <- lm(pm_krig ~ spl, data = ts)
+    # estimated predicted values based on the spline and bind with dates
+    pm_pred <- predict(pm_mod, type="response")
+    # rep df val by length of prediction
+    degree_freedom <- rep(df_val, length(pm_pred))
+    # rep aic val by lenth of prediction 
+    aic <- round(rep(AIC(pm_mod), length(pm_pred)),2)
+    # join with total_ed 
+    plot_df <- ts %>% 
+      select(date, fips, pm_krig) %>% 
+      cbind(pm_pred, degree_freedom, aic)
+  } # end function
+) # end map 
 ```
 
-```{r colorado_import}
-# define relative path to data folder
-co_path <- paste0("../../data/health/2010-2015_morbidity_co_ts.csv")
-# read in dataframe using read_csv function from tidyverse package
-co_ts <- read_csv(co_path, progress = F) 
+Plotting fits of splines to see how well spline estimates track PM~2.5~ exposure series.
+
+```{r spline_fit_plot}
+spline_subset <- spline_fits %>% 
+  filter(degree_freedom %in% (5:10))
+
+
+ggplot(data = spline_fits, aes(x=date, y=pm_krig)) +
+  geom_point(colour = "#24c6dc", size = 0.2) +
+  geom_line(aes(x=date, y=pm_pred), colour = "#ff00cc") +
+  facet_wrap(~degree_freedom) +
+  ggtitle("Spline fit of PM2.5 by degrees of freedom") +
+  xlab("2010-2015") +
+  ylab("PM2.5 ug/m^3") +
+  ryan_theme
 ```
 
-```{r read_denom}
-# colorado census
-co_denom <- read_csv("../../data/census/2016-colorado_population.csv") %>% 
-  select(GEO.id2, 'GEO.display-label', respop72010:respop72016) %>% 
-  rename(fips = GEO.id2, county = 'GEO.display-label') %>% 
-  rename_at(vars(respop72010:respop72016), 
-            funs(paste0("pop",str_sub(., start=8)))) %>% 
-  # take out state name and "county" from county name
-  mutate(county = str_split_fixed(county, " County", n=2)[,1])
-# sum up counties to get a state total
-co_denom_total <- co_denom %>% 
-  summarise_at(vars(pop2010:pop2016), sum) %>% 
-  gather(key="year", value = "pop", pop2010:pop2016) %>% 
-  mutate(year = as.numeric(str_sub(year, start = 4)))
+I think I need to move the more complicated models over to the server, save the output, and work with that.
 
-# washington cesus
-wa_denom <- read_csv("../../data/census/2016-washington_population.csv") %>% 
-  select(GEO.id2, 'GEO.display-label', respop72010:respop72016) %>% 
-  rename(fips = GEO.id2, county = 'GEO.display-label') %>% 
-  rename_at(vars(respop72010:respop72016), 
-            funs(paste0("pop",str_sub(., start=8)))) %>% 
-  # take out state name and "county" from county name
-  mutate(county = str_split_fixed(county, " County", n=2)[,1])
-# sum up counties to get a state total
-wa_denom_total <- wa_denom %>% 
-  summarise_at(vars(pop2010:pop2016), sum) %>% 
-  gather(key="year", value = "pop", pop2010:pop2016) %>% 
-  mutate(year = as.numeric(str_sub(year, start = 4)))
-```
+Denver County
+```{r}
+denver <- ts %>% filter(fips == "08031") %>% 
+  mutate(month = lubridate::month(date))
 
-I think I want to move all this code (health and exposure time series) to its own script where I make the analysis dataset.
+head(denver)
+ggplot(denver, aes(x=date, y=resp)) +
+  geom_point()
 
-Note: Change the name and just do the full time series analysis here.
-
-```{r analysis_df}
-total_ts <- co_ts %>% 
-  bind_rows(wa_ts) %>% 
-  filter(strata == "total") %>% 
-  left_join(county_pm_ts, by = c("date", "fips")) 
-
+mod <- glm(resp ~ pm_smk + temp_f, family="poisson"(link="log"), data = denver)
+summary(mod)
 ```
 
