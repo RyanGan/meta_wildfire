@@ -60,14 +60,15 @@ state_key <- data.frame(cbind(state_fp, state)) %>%
 county_pm_ts <- list(krig_pm, bg_pm, hms, temp) %>% 
   # bind list together
   reduce(function(df1,df2)left_join(df1,df2, by = c("fips", "date"))) %>% 
-  mutate(pm_krig = ifelse(pm_krig < 0, 0, pm_krig), # set values lower than 0 to 0
+  mutate(month = lubridate::month(date),
+         pm_krig = ifelse(pm_krig < 0, 0, pm_krig), # set values lower than 0 to 0
          # create smoke pm variable
          pm_smk = ifelse(pm_krig - bg_pm > 0, pm_krig - bg_pm, 0),
          # create binary smoke variables
-         smoke0 = ifelse(pm_smk > 0, 1, 0),
-         smoke5 = ifelse(pm_smk > 5, 1, 0), 
-         smoke10 = ifelse(pm_smk > 10, 1, 0),
-         smoke15 = ifelse(pm_smk > 15, 1, 0),
+         smoke0 = ifelse(pm_smk > 0 & month %in% c(5:9), 1, 0),
+         smoke5 = ifelse(pm_smk > 5 & month %in% c(5:9), 1, 0), 
+         smoke10 = ifelse(pm_smk > 10 & month %in% c(5:9), 1, 0),
+         smoke15 = ifelse(pm_smk > 15 & month %in% c(5:9), 1, 0),
          # create state variables based on fips codes
          state_fp = as.character(str_sub(fips, start = 1, end = 2))) %>% 
   # join state names in
@@ -77,8 +78,8 @@ county_pm_ts <- list(krig_pm, bg_pm, hms, temp) %>%
   arrange(fips, date) %>% 
   mutate(high_pm_day = ifelse(pm_krig >= 22.31, 1, 0),
          smoke_wave = ifelse(lag(high_pm_day, order_by = fips)==1 &
-                               high_pm_day==1, 1, 0)) %>% 
-  select(state, state_fp, fips, date, pm_krig, bg_pm, pm_smk, hms, temp_k,
+                               high_pm_day==1 & month %in% c(5:9), 1, 0)) %>% 
+  select(state, state_fp, fips, date, month, pm_krig, bg_pm, pm_smk, hms, temp_k,
          temp_f, smoke0, smoke5, smoke10, smoke15, high_pm_day, smoke_wave)
 
 # write csv file for rish
