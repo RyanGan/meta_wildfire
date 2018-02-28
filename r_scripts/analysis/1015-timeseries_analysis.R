@@ -36,7 +36,8 @@ exposure <- c("smoke0", "smoke5", "smoke10", "smoke15", "smoke_wave")
 exp_out_combo <- expand.grid(exposure, outcomes) %>% arrange(Var1)
 
 # set up cluster of 8 cores to parallelize models
-cl <- makeCluster(8)
+cores <- detectCores()
+cl <- makeCluster(cores)
 
 # load packages on each processor of the node/cluster
 clusterCall(cl, function() c(library(tidyverse), library(lme4)))
