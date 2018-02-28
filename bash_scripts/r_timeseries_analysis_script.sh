@@ -1,6 +1,6 @@
 #!/bin/bash
 #PBS -N ts_analysis
-#PBS -l nodes=1:ppn=6
+#PBS -l nodes=1:ppn=8
 #PBS -W group_list=pierce_group
 #PBS -q batch
 #PBS -M rgan@colostate.edu
