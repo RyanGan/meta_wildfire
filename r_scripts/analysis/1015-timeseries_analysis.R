@@ -12,6 +12,7 @@ library(tidyverse)
 library(lme4) # loading lme4 mixed model package
 library(parallel)
 
+sessionInfo()
 # read in time series ----
 ts <- read_csv("./data/health/1015-morbidity_pm_ts.csv") %>% 
   filter(!is.na(pm_krig)) %>% 
@@ -35,8 +36,9 @@ exposure <- c("smoke0", "smoke5", "smoke10", "smoke15", "smoke_wave")
 
 exp_out_combo <- expand.grid(exposure, outcomes) %>% arrange(Var1)
 
+print(head(exp_out_combo))
 # set up cluster of 8 cores to parallelize models
-cores <- detectCores()
+cores <- parallel::detectCores()
 # check to see if cores detected
 print(cores)
 cl <- makeCluster(cores)
