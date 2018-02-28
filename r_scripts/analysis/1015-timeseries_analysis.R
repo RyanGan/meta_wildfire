@@ -37,7 +37,11 @@ exp_out_combo <- expand.grid(exposure, outcomes) %>% arrange(Var1)
 
 # set up cluster of 8 cores to parallelize models
 cores <- detectCores()
+# check to see if cores detected
+print(cores)
 cl <- makeCluster(cores)
+# check cluster
+print(cl)
 
 # load packages on each processor of the node/cluster
 clusterCall(cl, function() c(library(tidyverse), library(lme4)))
