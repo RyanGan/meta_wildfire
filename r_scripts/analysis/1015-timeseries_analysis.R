@@ -56,7 +56,7 @@ clusterExport(cl, c("ts", "exp_out_combo"),
 # start time
 start <- Sys.time()
 # parallel apply
-binary_smoke_results <- parApply(exp_out_combo,1, function(x){
+binary_smoke_results <- parApply(cl, exp_out_combo,1, function(x){
   # define outcome and exposure
   outcome <- x[2]
   exposure <- x[1]
