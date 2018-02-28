@@ -87,7 +87,7 @@ smoke10_dl_results <- parSapply(cl, outcomes, function(x){
   # fit mixed model
   mod <- glmer(as.formula(paste0(outcome,
       "~smk_basis+weekend+month+year+state+(1|fips)+offset(log(population))")),
-               family = "quasipoisson"(link="log"), data = ts_lag,
+               family = "poisson"(link="log"), data = ts_lag,
                control = glmerControl(optimizer = "bobyqa"))
   
   # calculate estimates ----

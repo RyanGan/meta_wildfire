@@ -63,7 +63,7 @@ binary_smoke_results <- parApply(cl, exp_out_combo,1, function(x){
   # run model
   mod <- glmer(as.formula(paste0(outcome, "~", 
     exposure, "+weekend+month+year+state+(1|fips)+offset(log(population))")),
-      family = "quasipoisson"(link="log"), data = ts,
+      family = "poisson"(link="log"), data = ts,
       control = glmerControl(optimizer = "bobyqa"))
 
   # broom:tidy the model
