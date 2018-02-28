@@ -12,7 +12,6 @@ library(tidyverse)
 library(lme4) # loading lme4 mixed model package
 library(parallel)
 
-sessionInfo()
 # read in time series ----
 ts <- read_csv("./data/health/1015-morbidity_pm_ts.csv") %>% 
   filter(!is.na(pm_krig)) %>% 
@@ -46,9 +45,10 @@ cl <- makeCluster(cores)
 print(cl)
 
 # load packages on each processor of the node/cluster
-clusterCall(cl, function() c(library(tidyverse), library(lme4)))
+clusterCall(cl, function() c(library(tidyverse), library(lme4), 
+                             library(splines)))
 
-# export global sf objects and empty tibble to each core
+# export global objects to cluster
 clusterExport(cl, c("ts", "exp_out_combo"), 
               envir = .GlobalEnv)
 
@@ -62,7 +62,7 @@ binary_smoke_results <- parApply(cl, exp_out_combo,1, function(x){
   exposure <- x[1]
   # run model
   mod <- glmer(as.formula(paste0(outcome, "~", 
-    exposure, "+weekend+month+year+(1|fips)+offset(log(population))")),
+    exposure, "+weekend+month+year+state+(1|fips)+offset(log(population))")),
       family = "quasipoisson"(link="log"), data = ts,
       control = glmerControl(optimizer = "bobyqa"))
 
@@ -90,9 +90,9 @@ print(time)
 # check
 print(head(binary_smoke_results))
 
-# close cluster
-stopCluster(cl)
-
 # write file 
 write_csv(binary_smoke_results, "./data/health/1015-ts_binary_smoke_results.csv")
+
+# close cluster
+stopCluster(cl)
 

@@ -158,23 +158,9 @@ chelan <- ts %>% filter(fips == "53007") %>%
   filter(complete.cases(.)) %>% 
   filter(year == 2012)
 
-# spline
-spl <- ns(chelan$date, df = 13)
-# predict pm
-pm_mod <- lm(pm_krig ~ spl, data = chelan)
-# predicted pm
-pm_pred <- predict(pm_mod, type="response")
-# bind to denver
-c_pred_pm <- chelan %>% 
-  cbind(., pm_pred)
-
-ggplot(c_pred_pm, aes(x=date, y=pm_krig)) +
-  geom_point() +
-  geom_line(aes(x=date, y=pm_pred), color = "red")
-
-# simple mod
-mod <- glm(asthma ~ smoke_wave + temp_f + as.factor(month), 
-           family="poisson"(link="log"), data = chelan)
+# simple binary exposure mod
+mod <- glm(hf ~ smoke_wave + temp_f + month + offset(log(population)), 
+           family="quasipoisson"(link="log"), data = chelan)
 summary(mod)
 
 ggplot(chelan, aes(x=date, y=resp)) +
@@ -182,5 +168,31 @@ ggplot(chelan, aes(x=date, y=resp)) +
 ```
 
 Problem Identified: When I include the full year, there are going to be PM levels that meet a definition above PM estimate - background that is not really due to smoke. Solution to this would be to look only in certain months (i.e. wildfire season), or include interaction term where a binary smoke variable is created (I've added additional month criteria).
+
+```{r}
+binary_results <- read_csv(paste0("../../data/health/",
+  "1015-ts_binary_smoke_results.csv")) %>% 
+    mutate(outcome = forcats::fct_relevel(outcome,
+    unique(binary_results$outcome)),
+    group = as.factor(if_else(outcome %in% outcomes[1:5], 
+                    "respiratory", "cardiovascular"))) 
+
+
+ggplot(data=binary_results, aes(x=outcome, y = rr, colour = group)) +
+  geom_point() +
+  geom_errorbar(aes(ymin=lower95, ymax=upper95), width = 0.3) +
+  scale_color_manual(values = c("#9cecfb", "#ff00cc")) +
+  geom_hline(yintercept = 1, linetype = "dashed", colour = "red") +
+  facet_wrap(~exposure) +
+  ylab("Risk Ratio") +
+  xlab("Outcome") +
+  ggtitle(paste0("Binary Smoke Association")) +
+  ryan_theme +
+  theme(panel.grid.major.x = element_blank(),
+        panel.grid.major.y = element_line(linetype = "dotted"),
+        panel.grid.minor = element_blank(),
+        axis.text.x = element_text(angle = 90, hjust=0.95, vjust = 0.75))
+```
+
 
 I think I might need to go with the timestrat casecross design.
