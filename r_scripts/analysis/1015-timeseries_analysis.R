@@ -10,9 +10,7 @@
 # libraries ----
 library(tidyverse)
 library(lme4) # loading lme4 mixed model package
-library(splines) # splines package
 library(parallel)
-
 
 # read in time series ----
 ts <- read_csv("./data/health/1015-morbidity_pm_ts.csv") %>% 
@@ -37,8 +35,20 @@ exposure <- c("smoke0", "smoke5", "smoke10", "smoke15", "smoke_wave")
 
 exp_out_combo <- expand.grid(exposure, outcomes) %>% arrange(Var1)
 
-# binary result test results ----
+# set up cluster of 8 cores to parallelize models
+cl <- makeCluster(8)
 
+# load packages on each processor of the node/cluster
+clusterCall(cl, function() c(library(tidyverse), library(lme4)))
+
+# export global sf objects and empty tibble to each core
+clusterExport(cl, c("ts", "exp_out_combo"), 
+              envir = .GlobalEnv)
+
+# binary result test results ----
+# start time
+start <- Sys.time()
+# parallel apply
 binary_smoke_results <- parApply(exp_out_combo,1, function(x){
   # define outcome and exposure
   outcome <- x[2]
@@ -65,8 +75,16 @@ binary_smoke_results <- parApply(exp_out_combo,1, function(x){
   # bind list together as rows
   map_dfr(., bind_rows)
 
+# stop time
+stop <- Sys.time()
+time <- stop - start
+# print time
+print(time)
 # check
-head(binary_smoke_results)
+print(head(binary_smoke_results))
+
+# close cluster
+stopCluster(cl)
 
 # write file 
 write_csv(binary_smoke_results, "./data/health/1015-ts_binary_smoke_results.csv")
