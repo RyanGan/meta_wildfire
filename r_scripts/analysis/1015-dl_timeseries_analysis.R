@@ -141,12 +141,11 @@ smoke_dl_results <- parApply(cl, exp_out_combo,1, function(x){
   l_type <- as.character(rep("lag", times = length(estimate)))
   
   # l_estimate
-  l_estimate <- data.frame(outcome, l_type, time, exp(estimate), 
+  l_estimate <- data.frame(exposure, outcome, l_type, time, exp(estimate), 
                            exp(l_lower95), exp(l_upper95), row.names = NULL) 
   # assign column names
-  colnames(l_estimate) <- c("outcome", "type","time", "estimate",
+  colnames(l_estimate) <- c("exposure", "outcome", "type","time", "estimate",
                             "lower95","upper95") 
-  
   # estimate cumulative ----
   c_type <- as.character(rep("cumulative", times = length(estimate)))
   # sequential cumulative estimate
@@ -161,10 +160,11 @@ smoke_dl_results <- parApply(cl, exp_out_combo,1, function(x){
   c_lower95 <- cumulative_estimate+(cumulative_se*qnorm(1-0.975))
   c_upper95 <- cumulative_estimate+(cumulative_se*qnorm(0.975))
   # return dataframe
-  c_estimate <- data.frame(outcome, c_type, time, exp(cumulative_estimate), 
-                           exp(c_lower95), exp(c_upper95), row.names = NULL)
+  c_estimate <- data.frame(exposure, outcome, c_type, time, 
+                           exp(cumulative_estimate), exp(c_lower95), 
+                           exp(c_upper95), row.names = NULL)
   # assign column names
-  colnames(c_estimate) <- c("outcome", "type","time","estimate",
+  colnames(c_estimate) <- c("exposure", "outcome", "type","time","estimate",
                             "lower95","upper95") 
   # bind lag and cumulative estimates together
   return_estimate <- rbind(c_estimate, l_estimate)
@@ -178,6 +178,8 @@ smoke_dl_results <- parApply(cl, exp_out_combo,1, function(x){
 
 # check
 print(head(smoke_dl_results))
+# print warnings
+warnings()
 
 # write file ----
 write_csv(smoke_dl_results, "./data/health/1015-ts_smoke_dl_results.csv")
