@@ -1,13 +1,16 @@
 ---
-title: "Exploring County-Level Population-Weighted PM~2.5~"
+title: "2010-2015 Washington and Colorado Smoke and Morbidity"
 author: "Ryan Gan"
-date: "2018-02-26"
-output: html_notebook
-editor_options: 
+date: '2018-02-26'
+output:
+  html_document:
+    df_print: paged
+editor_options:
   chunk_output_type: inline
 ---
 
 ## Introduction
+
 I have population-weighted PM~2.5~ values provided by Kate and air temperature at 2 meters values downloaded from the NCEP/NCARR reanalysis data sets. This seemed like a reasonable height; other options would be surface temperature. Both estimates were population-weighted to the county level using 2015 population density estimates from SEDAC (version 4). Right now, I only have counties for the Western US, but could produce estimates for the entire continental US.
 
 I have PM~2.5~ estimates from 2006-2015. I will only use 2010 to 2015, which are the years I have health outcomes data. I only downloaded the 2010 to 2015 temperature estimates.
@@ -16,12 +19,10 @@ Setting up R Notebook knit options and libraries
 ```{r kniter_opt}
 # knitr options
 knitr::opts_chunk$set(fig.height = 6, fig.width = 8, fig.align = "center",
-                      progress = F, message = F, warning = F, echo=F,
                       results = "asis")
 # libraries
 library(tidyverse)
-library(lme4) # loading lme4 mixed model package
-library(splines) # splines package
+library(sf)
 ```
 
 Setting up dark color theme.
@@ -41,10 +42,109 @@ ryan_theme <- theme(panel.background = element_rect(fill = "black",
         legend.key = element_blank())
 ```
 
-## Data Import and Wrangle
-Read in time series dataframe that contains Colorado and Washington counts and PM~2.5~ concentrations.
+## Environmental Data
 
-```{r data_import}
+Importing population-weighted environmental data of PM~2.5~ estimated using kriging and reanalysis temperature data for counties in the Western US.
+
+```{r pm_import}
+# read pm values
+county_pm_ts <- read_csv("../../data/smoke/1015-county_popwt_pm.csv")
+
+# read western county sf
+wus_county_sf <- st_read(dsn = "../../data/shapefile/us_county/", 
+                     layer = "us_county") %>% 
+  mutate(fips = paste0(STATEFP,COUNTYFP)) %>% 
+  #filter to counties in western US
+  filter(fips %in% unique(county_pm_ts$fips))
+```
+
+Calculating mean and median values of PM~2.5~, background PM~2.5~, HMS proportion of county covered by smoke, and temperature in degrees Fahrenheit.
+```{r state_avg}
+# state averages
+avg_state <- county_pm_ts %>% 
+  group_by(state, date) %>% 
+  summarise(pm_mean = mean(pm_krig), pm_med = median(pm_krig), 
+            bg_pm_mean = mean(bg_pm), bg_pm_med = median(bg_pm),
+            hms_mean = mean(hms), hms_med = median(hms), 
+            temp_mean = mean(temp_f), temp_med = median(temp_f))
+```
+
+### PM~2.5~
+
+Plot of county-specific PM~2.5~ time series for each state in the Western US from 2010 to 2016. The red line is the average of the county seasonal background PM~2.5~. 
+
+```{r state_pm_plot}
+# plot
+plot <- ggplot(county_pm_ts, aes(x=date,y=pm_krig, group = fips)) +
+  geom_line(color = "#93f9b9") +
+  geom_line(data = avg_state, aes(x=date,y=bg_pm_mean, group=NA), 
+            color = "red") +
+  facet_wrap(~state) +
+  ylab("PM2.5 ug/m^3") +
+  xlab("Date") +
+  ggtitle("PM2.5 for each county by state") +
+  ryan_theme
+
+print(plot)
+```
+
+I think it looks like the extreme peaks in the spring/summer/fall months are associated with fire smoke. The extreme peaks in PM~2.5~ for Washington look like they correspond with the 2012 Wenatchee Complex fire and the 2015 Pacific Northwest Fires. For Colorado, I notice an increase in PM~2.5~ around the same time as the High Park Fire (although this is not nearly as pronounced as other states). It looks like the big peak in Nevada corresponds with the Rim Fire in August 2013. Oregon PM~2.5~ corresponds with peaks in 2013 Douglas-Complex fire. It's likely that peaks >75 ug/m^3^ in California, Montana, Idaho, New Mexico are associated with fire smoke too. As for Arizona, I'm not sure since they experience dust storms too. Unsure about Utah too since they have pretty bad air quality in Salt Lake during the Winter.
+
+#### Problem/Question
+
+This raised a question for me where before we've modeled specific states that we knew experienced fire smoke for a limited time-frame. This is important for my binary classifiers of smoke, where usually I just said if it was >10 ug/m^3^, >15, etc. over PM~2.5~ - background PM~2.5~. I've also created Coco's smoke wave (two days over 98^th^ percentile of 22.3 ug/m^3^). I've now added the additional criteria that this condition needs to be met from May to September. This may be too simplistic to define a binary smoke event.
+
+Another problem is that the continuous variable of estimated PM - background PM is no longer even a decent indication of PM~2.5~ due to wildfire smoke, and probably not appropriate to use. I think an interaction between PM~2.5~ and a binary classifier of smoke is still a good approach.
+
+Can information on temperature and HMS be used to help inform prediction of when a county's air quality is impacted by smoke? Let's look.
+
+### HMS Smoke in Column
+
+For HMS proportion, I population-weighted the binary (0 or 1) grid cells for each county, which should give me an estimate of the proportion of the county with smoke in the atmospheric column (assessed via HMS) and weighted by population density.
+```{r hms_plot}
+plot <- ggplot() +
+  geom_line(data = avg_state, aes(x=date,y=hms_mean, group=NA), 
+            color = "#6a82fb") +
+  facet_wrap(~state) +
+  ylab("Mean proportion smoke cover)") +
+  xlab("Date") +
+  ggtitle("Mean proportion of county smoke cover by state") +
+  ryan_theme
+
+print(plot)
+```
+
+I'm struggling a bit with what the mean of the weighted county proportions covered by smoke mean exactly, but plotting each FIPS time series wasn't really helpful. Here is how I may interpret it: the higher the proportion, the more of the state with smoke in the atmospheric column for that day. So values of 1 would suggest the whole state has some detectable smoke overhead. It looks like most smoke occurs in times other than that winter months.
+
+### Temperature in F
+Plotting temperature in F for each county in each state. Red line is the mean temperature for counties in the state.
+
+```{r temp_plot}
+plot <- ggplot(county_pm_ts, aes(x=date,y=temp_f, group = fips)) +
+  geom_line(color = "#7f00ff") +
+  geom_line(data = avg_state, aes(x=date,y=temp_mean, group=NA), 
+            color = "red") +
+  facet_wrap(~state) +
+  ylab("Degrees F") +
+  xlab("Date") +
+  ggtitle("Temperature for each county by state") +
+  ryan_theme
+
+print(plot)
+```
+Temperature trends have a nice period trend to them. 
+
+I think I could probably use HMS proportion. Maybe county with >0.25 smoke and PM~2.5~ estimate - background > x as an indicator of a county affected by smoke at ground-level?
+
+#### Research/Analysis Idea
+
+Can we use PM~2.5~, temperature, and HMS smoke to predict a county affected by smoke on a particular day? We could use truth as official state air quality warnings for smoke. I know Colorado has these. I'm sure other states do too. Could use a small training set of days in counties known to be impacted by smoke from the major fires above, build a classification model of some sort, then use this model to predict binary smoke classifier across the regions and time-series. 
+
+## Morbidity Data
+
+Read in time series data frame that contains Colorado and Washington counts and PM~2.5~ concentrations.
+
+```{r morbidity_data_import}
 ts <- read_csv("../../data/health/1015-morbidity_pm_ts.csv") %>% 
   filter(!is.na(pm_krig)) %>% 
   mutate(month = lubridate::month(date),
@@ -55,144 +155,201 @@ ts <- read_csv("../../data/health/1015-morbidity_pm_ts.csv") %>%
                             month %in% c(9:11)~ "fall"))
 ```
 
-Same-day association.
-```{r}
-spl <- ns(ts$date, df = 35)
-# random effects mod
-mod <- glmer(asthma ~ smoke_wave + temp_f +  
-               (1|fips) + offset(log(population)), 
-             family = "poisson"(link="log"), data = ts,
-             control = glmerControl(optimizer = "bobyqa"))
+Aggregating Washington and Colorado counts of inpatient visits admitted through the emergency room/department for respiratory and cardiovascular disease outcomes (CVD) and plotting time series by state and outcome.
 
-summary(mod)
-summary(ts)
+```{r state_resp_cvd}
+# dataframe
+resp_cvd_ts <- ts %>% 
+  group_by(date, state) %>% 
+  summarize(resp = sum(resp), cvd = sum(cvd)) %>% 
+  gather("outcome", "n", resp:cvd) %>% 
+  mutate(group = paste0(state, ": ", outcome))
 
-# glm mod
-mod2 <- glm(cvd ~ smoke_wave + temp_f + state + month + year + fips +
-              offset(log(population)), 
-            family = "poisson"(link="log"), data = ts)
-
-summary(mod2)
-```
-
-Predict time-series.
-```{r}
-# define degrees of freedom
-spl_df <- 30:35
-
-# fit spline by date
-spline_fits <- spl_df %>% 
-  map_dfr(function(df_val){
-    date <- ts$date
-    # run spline based on date sequence
-    spl <- ns(date, df = df_val)
-    # model gwr_smoke units regressed on the spline
-    pm_mod <- lm(pm_krig ~ spl, data = ts)
-    # estimated predicted values based on the spline and bind with dates
-    pm_pred <- predict(pm_mod, type="response")
-    # rep df val by length of prediction
-    degree_freedom <- rep(df_val, length(pm_pred))
-    # rep aic val by lenth of prediction 
-    aic <- round(rep(AIC(pm_mod), length(pm_pred)),2)
-    # join with total_ed 
-    plot_df <- ts %>% 
-      select(date, fips, pm_krig) %>% 
-      cbind(pm_pred, degree_freedom, aic)
-  } # end function
-) # end map 
-```
-
-Plotting fits of splines to see how well spline estimates track PM~2.5~ exposure series.
-
-```{r spline_fit_plot}
-spline_subset <- spline_fits %>% 
-  filter(degree_freedom %in% (5:10))
-
-
-ggplot(data = spline_fits, aes(x=date, y=pm_krig)) +
-  geom_point(colour = "#24c6dc", size = 0.2) +
-  geom_line(aes(x=date, y=pm_pred), colour = "#ff00cc") +
-  facet_wrap(~degree_freedom) +
-  ggtitle("Spline fit of PM2.5 by degrees of freedom") +
-  xlab("2010-2015") +
-  ylab("PM2.5 ug/m^3") +
+# plot 
+plot <- ggplot(resp_cvd_ts, aes(x=date,y=n)) +
+  geom_point(color = "#00dbde", size = 0.1) +
+  facet_wrap(~group) +
   ryan_theme
+
+  
+print(plot)  
 ```
 
-I think I need to move the more complicated models over to the server, save the output, and work with that.
+I have one more year of claims data from Colorado compared to Washington. Counts are slightly higher for both CVD and respiratory outcomes in Washington compared to Colorado, but the population is also higher. I've presented rates in previous documents, and in summary, I don't think there is a huge difference in rates by states. Another interesting trend is that for both states, on some New Year's Eve, the numbers drop to levels that aren't believable, but when you look at New Year's Day, there are peak spikes. I kind of think that maybe people that go to the ER on New Year's Eve may be counted towards the next years counts. There may be a ligit reason for this. Maybe it's easier to bill on a next years cycle or something, admin staff in charge of logging/billing off for the night? 
 
-Denver County
-```{r}
-# denver county complete case
-denver <- ts %>% filter(fips == "08031") %>% 
-  mutate(month = lubridate::month(date)) %>% 
-  filter(complete.cases(.))
+Anyways, now that I have a full year I probably need to adjust for this now that I think about it...
 
-# spline
-spl <- ns(denver$date, df = 30)
-# predict pm
-pm_mod <- lm(pm_krig ~ spl, data = denver)
-# predicted pm
-pm_pred <- predict(pm_mod, type="response")
-# bind to denver
-denver_pred_pm <- denver %>% 
-  cbind(., pm_pred)
+### Same-Day Association Results
 
-ggplot(denver_pred_pm, aes(x=date, y=pm_krig)) +
-  geom_point() +
-  geom_line(aes(x=date, y=pm_pred), color = "red")
+I evaluated the association between binary smoke classifiers and cardiopulmonary outcomes in a time-series model. I ran my usual cutoffs of 0, 5, 10, and 15 ug/m^3^ above the difference between the estimated PM~2.5~ from the kriging model and seasonal background. I had the additional criteria of occuring in the month of May through September. Smoke wave was two days of PM~2.5~ of the 98^th^ percentile of daily county population-weighted averages of PM~2.5~ in the Western US, which was > 22.3 ug/m^3^. I have not yet integrated HMS information in to this definition yet.
 
-# simple mod
-mod <- glm(resp ~ pm_krig + smoke5 + pm_krig*smoke5 + temp_f + spl, 
-           family="poisson"(link="log"), data = denver)
-summary(mod)
+I ran mixed effect Poisson models adjusting for temperature, month, year, weekend, and state. Models treated county as a random effect, and I included a population offset. I ran this on the ozone cluster; importing results here.
 
-mod2 <- glm(resp ~ pm_krig + spl, 
-           family="poisson"(link="log"), data = denver)
-summary(mod2)
-```
+```{r same_day_results}
+# outcome order
+out_order <- c("resp", "asthma", "copd", "acute_bronch", "pneum", "cvd",
+               "arrhythmia", "cereb_vas", "hf", "ihd", "mi")
+ex_order <- c("smoke0", "smoke5", "smoke10", "smoke15", "smoke_wave")
 
-```{r larimer}
-chelan <- ts %>% filter(fips == "53007") %>% 
-  mutate(month = lubridate::month(date)) %>% 
-  filter(complete.cases(.)) %>% 
-  filter(year == 2012)
-
-# simple binary exposure mod
-mod <- glm(hf ~ smoke_wave + temp_f + month + offset(log(population)), 
-           family="quasipoisson"(link="log"), data = chelan)
-summary(mod)
-
-ggplot(chelan, aes(x=date, y=resp)) +
-  geom_point()
-```
-
-Problem Identified: When I include the full year, there are going to be PM levels that meet a definition above PM estimate - background that is not really due to smoke. Solution to this would be to look only in certain months (i.e. wildfire season), or include interaction term where a binary smoke variable is created (I've added additional month criteria).
-
-```{r}
-binary_results <- read_csv(paste0("../../data/health/",
+# import same-day results
+same_day_results <- read_csv(paste0("../../data/health/",
   "1015-ts_binary_smoke_results.csv")) %>% 
-    mutate(outcome = forcats::fct_relevel(outcome,
-    unique(binary_results$outcome)),
-    group = as.factor(if_else(outcome %in% outcomes[1:5], 
-                    "respiratory", "cardiovascular"))) 
-
-
-ggplot(data=binary_results, aes(x=outcome, y = rr, colour = group)) +
+  filter(outcome != "cardiopulm_n") %>% 
+  mutate(outcome = forcats::fct_relevel(outcome, out_order),
+         exposure = forcats::fct_relevel(exposure, ex_order),
+         group = as.factor(if_else(outcome %in% out_order[1:5],
+          "respiratory", "cardiovascular")))
+# plot
+plot <- ggplot(data=same_day_results, aes(x=outcome, y = rr, colour = group)) +
   geom_point() +
   geom_errorbar(aes(ymin=lower95, ymax=upper95), width = 0.3) +
   scale_color_manual(values = c("#9cecfb", "#ff00cc")) +
   geom_hline(yintercept = 1, linetype = "dashed", colour = "red") +
-  facet_wrap(~exposure) +
-  ylab("Risk Ratio") +
+  facet_wrap(~exposure, scales = "free_y") +
+  ylab("Rate Ratio: Smoke Exposure") +
   xlab("Outcome") +
-  ggtitle(paste0("Binary Smoke Association")) +
+  ggtitle(paste0("Association between binary smoke and ED admissions")) +
   ryan_theme +
   theme(panel.grid.major.x = element_blank(),
         panel.grid.major.y = element_line(linetype = "dotted"),
         panel.grid.minor = element_blank(),
         axis.text.x = element_text(angle = 90, hjust=0.95, vjust = 0.75))
+
+print(plot)
 ```
 
+For these binary results, I'm going to consider the smoke-wave variable to be the most accurate (we should test the sensitivity/specificity). There is an increased risk for both asthma and COPD hospitalizations. The most ocnsistent signal I see is with COPD. Asthma fluctuates between definitions, but smoke wave shows an association. This could be that the same-day association may miss people who end up needing to go the following day (early morning or next day) following a smoke day. 
 
-I think I might need to go with the timestrat casecross design.
+Note, I saw very similar associations with the continuous smoke PM~2.5~ variables for 2015 Washington and Colorado for both the time-series study and the time-stratified case-crossover studies I used as a sensitivity analysis. Therefore, I'm slightly more confident that perhaps our Washington 2012 study was the outlier where maybe smoke levels were so high that there was indeed an association on the same day. Perhaps a better way to say this is that I think it's very likely that the risk is increased for asthma on the same day of smoke exposure, but it's also very likely that it may take a day or two for the effects of smoke exposure to manifest. I suspect this is a very likely scenario for mortality too.
+
+### Distributed Lag Results
+
+Evaluating the cumulative lagged effect of up to a week of smoke exposure with distributed lag models. Same thing as above. These random-effects models were compuationally-expensive to run, so I ran them on the ozone server in parallel and I'm importing the results here. I've also only decided to evaluate distributed lag results for smoke10, smoke15, and smoke_wave since I think smoke0 and smoke5 don't have very great sensitivity or specificity (we should test this!).
+
+```{r import_dl_results}
+dl_results <- read_csv("../../data/health/1015-ts_smoke_dl_results.csv") %>% 
+  filter(outcome != "cardiopulm_n") %>% 
+  mutate(outcome = forcats::fct_relevel(outcome, out_order),
+         group = as.factor(if_else(outcome %in% out_order[1:5],
+          "respiratory", "cardiovascular")))
+```
+
+Association between lagged smoke > 10 ug/m^3^ and cardiopulmonary outcomes. Models account for county as a random effect, adjust for month, year, weekend, and state as fixed effects. County population offset included. For each spline for the distributed lag effect, I've set the degrees of freedom/knots at 3 to allow for a flexible enough shape. Usually I pick the degrees of freedom based onlowest AIC, but I've never seen a shape that suggested anything more than a third-order polynomial (i.e. 5th order polynomials look like 3rd order).
+
+#### Smoke 10
+
+Plotting the cumulative distributed lag association of the binary smoke > 10 classifier and rate ratio.
+
+```{r dl_smk10_results}
+# filter to smoke 10 results
+cumulative_results <- dl_results %>% 
+  filter(exposure == "smoke10" & type == "cumulative")
+
+# plot
+plot <- ggplot(cumulative_results, aes(x=time, y=estimate)) +
+  geom_line(colour = "#0ed2f7", size = 1) +
+  geom_ribbon(aes(ymin = lower95, ymax = upper95), 
+              fill = "#b2fefa", alpha = 0.3) + 
+  scale_x_continuous(breaks = c(seq(0,7, by=1))) +
+  geom_hline(yintercept = 1, linetype = 2, colour = "red") +
+  facet_wrap(~outcome, scales="free_y") +
+  ylab("Rate Ratio: Exposed to Smoke (Yes vs. No)") +
+  xlab("Lagged Days") +
+  ggtitle("Smoke10: Cumulative") +
+  ryan_theme +
+  theme(panel.grid.major.x = element_blank(),
+        panel.grid.major.y = element_line(linetype = "dotted"),
+        panel.grid.minor = element_blank())
+
+print(plot)
+```
+
+My quick take on these results with smoke 10 variable is that smoke may not increase the risk until a day or two after exposure for asthma or COPD, but the longer the smoke is present, the risk increases pretty drastically. 
+
+#### Smoke 15
+
+Plotting the cumulative distributed lag association of the binary smoke > 15 classifier and rate ratio.
+
+```{r dl_smk15_results}
+# filter to smoke 15 results
+cumulative_results <- dl_results %>% 
+  filter(exposure == "smoke15" & type == "cumulative")
+
+# plot
+plot <- ggplot(cumulative_results, aes(x=time, y=estimate)) +
+  geom_line(colour = "#0ed2f7", size = 1) +
+  geom_ribbon(aes(ymin = lower95, ymax = upper95), 
+              fill = "#b2fefa", alpha = 0.3) + 
+  scale_x_continuous(breaks = c(seq(0,7, by=1))) +
+  geom_hline(yintercept = 1, linetype = 2, colour = "red") +
+  facet_wrap(~outcome, scales = "free_y") +
+  ylab("Rate Ratio: Exposed to Smoke (Yes vs. No)") +
+  xlab("Lagged Days") +
+  ggtitle("Smoke15: Cumulative") +
+  ryan_theme +
+  theme(panel.grid.major.x = element_blank(),
+        panel.grid.major.y = element_line(linetype = "dotted"),
+        panel.grid.minor = element_blank())
+
+print(plot)
+```
+
+Similar conclusions to smoke 10 with asthma and COPD, where the effect is most pronounced after a couple days of exposure. There may be an association with myocardial infarction too after 3 or 4 days of exposure.
+
+#### Smoke Wave
+
+Plotting the cumulative distributed lag association of the binary smoke wave classifier and rate ratio.
+
+```{r dl_smkwv_results}
+# filter to smoke wave results
+cumulative_results <- dl_results %>% 
+  filter(exposure == "smoke_wave" & type == "cumulative")
+
+# plot
+plot <- ggplot(cumulative_results, aes(x=time, y=estimate)) +
+  geom_line(colour = "#0ed2f7", size = 1) +
+  geom_ribbon(aes(ymin = lower95, ymax = upper95), 
+              fill = "#b2fefa", alpha = 0.3) + 
+  scale_x_continuous(breaks = c(seq(0,7, by=1))) +
+  geom_hline(yintercept = 1, linetype = 2, colour = "red") +
+  facet_wrap(~outcome, scales = "free_y") +
+  ylab("Rate Ratio: Exposed to Smoke (Yes vs. No)") +
+  xlab("Lagged Days") +
+  ggtitle("Smoke Wave: Cumulative") +
+  ryan_theme +
+  theme(panel.grid.major.x = element_blank(),
+        panel.grid.major.y = element_line(linetype = "dotted"),
+        panel.grid.minor = element_blank())
+
+print(plot)
+```
+
+For smoke-wave, which I'm considering the most reliable estimator of presence of smoke for now, there is an association with all respiratory, asthma, and COPD hospitalizations that increases pretty dramatically the longer there is smoke present. Unlike smoke 15, I do not see an association with MI.
+
+### Conclusions
+
+These results lead to similar conclusions as the 2015 Colorad/Washington time-series and time-stratified case-crossover studies where I think it may take a day or two to notice any increased risk respiratory outcomes (specifically for asthma and COPD) for a population. Association with cardiovascular disease still remains unclear, but if anything, it may suggest that it takes maybe 4 or more days of repeated exposure before the effect manifests. 
+
+#### Notes and Next Steps: 
+
+- I did not present distributed lag individual days here, but have that information. 
+
+- I did not fit a spline to the exposure series that may account for unmeasured factors that confound the association between outcome counts and smoke days. I do not think it's that essential in the case of binary classifiers of smoke as I think you could consider factors that affect a county being impacted by smoke as almost random in the sense of an assigned exposure. I realize there are atmospheric conditions that govern where smoke goes though, talking about this more from our epi association approach. Besides, I fit splines my last time serieis from 2015 and arrived at similar conclusions.
+
+- County-level population-weigthing is probably subject to a higher degree of misclassification compared to ZIP level, but we only have county-level information on mortality and I see value to keep it at the same spatial unit. 
+
+- I would like to go back and try and define a county impacted by smoke. This would let us look at interactions between continuous PM~2.5~ due to smoke and due to other sources.I need to chat with Bonne, Kate, Jeff, and Emily.
+
+- Interaction with distributed lag analyses seem hard/complicated, but seems possible. Perhaps Ander knows how to fit these. Source here:
+https://www.ncbi.nlm.nih.gov/pmc/articles/PMC3944968/pdf/kxt031.pdf
+
+- Unsure if the mixed model estimates for a Poisson produce stable variance estimates. There is no option for sandwich or quasipoisson models with the GLMER models to handle overdispersion. I don't think this is a huge issue, but I should check some assumptions (mainly mean fips count = fips variance). I think it may be possible to decrease some of the noise with a different model, specifically a Bayesian model. I could run this in STAN or JAGs, but I'm not sure how different my conclusions would be to this. Coincidently, I think the interaction model by Heaton and Peng above use a Bayesian model of some sort. Another reason to chat with Ander.
+
+- Work with Rish and run associations with mortality data; pilot with Colorado mortality data.
+
+- I will try another time-stratified case-crossover to confirm results here. I need to think about referent period. I think with two states and multiple years, I can shorten the referent periods to maybe a month.
+
+- Add Oregon. Jingyang has finished creating the dataframe I requested, but I haven't processed it to a time series yet.
+
+
+
