@@ -32,6 +32,11 @@ ts <- read_csv("./data/health/1015-morbidity_pm_ts.csv") %>%
 outcomes <- c("resp", "asthma", "copd", "acute_bronch", "pneum", "cvd", 
               "arrhythmia", "cereb_vas", "hf", "ihd", "mi", "cardiopulm_n")
 
+
+exposure <- c("smoke10", "smoke15", "smoke_wave")
+# expand grid so each outcome/exposure combo is modeled 
+exp_out_combo <- expand.grid(exposure, outcomes) %>% arrange(Var1)
+
 # read county pm timeseries
 county_pm_ts <- read_csv("./data/smoke/1015-county_popwt_pm.csv")
 
@@ -72,22 +77,25 @@ clusterCall(cl, function() c(library(tidyverse), library(lme4),
                              library(splines)))
 
 # export new set of objects to global objects to cluster
-clusterExport(cl, c("ts_lag", "smk_matrix", "outcomes"), 
+clusterExport(cl, c("ts_lag", "smk_matrix", "outcomes", "exposure"), 
               envir = .GlobalEnv)
 # Distributed lag association for smoke10 --------------------------------------
 # start time
 start <- Sys.time()
 
 # distributed lag function
-smoke10_dl_results <- parLapply(cl, outcomes, function(x){
-  outcome <- as.character(x)
+smoke_dl_results <- parApply(cl, exp_out_combo,1, function(x){
+  # define outcome and exposure
+  outcome <- x[2]
+  exposure <- x[1]
   # define basis b using natural spline function
   smk_b <- ns(0:(ncol(smk_matrix)-1), df = 3, intercept = T)
   # multiply lagged pm matrix by basis
   smk_basis <- smk_matrix %*% smk_b
   # fit mixed model
-  mod <- glmer(as.formula(paste0(outcome,
-      "~smk_basis+weekend+month+year+state+(1|fips)+offset(log(population))")),
+  mod <- glmer(as.formula(paste0(outcome,"~", exposure, 
+    "smk_basis + as.factor(weekend) + state + as.factor(month) +",
+     "as.factor(year) + (1|fips) + offset(log(population))")),
                family = "poisson"(link="log"), data = ts_lag,
                control = glmerControl(optimizer = "bobyqa"))
 
@@ -114,9 +122,10 @@ smoke10_dl_results <- parLapply(cl, outcomes, function(x){
   l_lower95 <- estimate+(l_se*qnorm(1-0.975))
   l_upper95 <- estimate+(l_se*qnorm(0.975))
   l_type <- as.character(rep("lag", times = length(estimate)))
+  
   # l_estimate
   l_estimate <- data.frame(outcome, l_type, time, exp(estimate), 
-                           exp(l_lower95), exp(l_upper95)) 
+                           exp(l_lower95), exp(l_upper95), row.names = NULL) 
   # assign column names
   colnames(l_estimate) <- c("outcome", "type","time", "estimate",
                             "lower95","upper95") 
@@ -135,8 +144,8 @@ smoke10_dl_results <- parLapply(cl, outcomes, function(x){
   c_lower95 <- cumulative_estimate+(cumulative_se*qnorm(1-0.975))
   c_upper95 <- cumulative_estimate+(cumulative_se*qnorm(0.975))
   # return dataframe
-  c_estimate <- data.frame(outcome, c_type, time,
-                     exp(cumulative_estimate), exp(c_lower95), exp(c_upper95))
+  c_estimate <- data.frame(outcome, c_type, time, exp(cumulative_estimate), 
+                           exp(c_lower95), exp(c_upper95), row.names = NULL)
   # assign column names
   colnames(c_estimate) <- c("outcome", "type","time","estimate",
                             "lower95","upper95") 
@@ -145,16 +154,18 @@ smoke10_dl_results <- parLapply(cl, outcomes, function(x){
   # return estimate  
   return(return_estimate)
   }) %>%   # end parLapply
-  # bind to dataframe
-  plyr::rbind.fill()
+  # bind list together as rows
+  map_dfr(., bind_rows)
+
+# check
+print(head(smoke_dl_results))
+
+# write file ----
+write_csv(smoke_dl_results, "./data/health/1015-ts_smoke_dl_results.csv")
 
 # stop time
 stop <- Sys.time()
 time <- stop - start
 # print time
 print(time)
-# check
-print(head(smoke10_dl_results))
 
-# write file ----
-write_csv(smoke10_dl_results, "./data/health/1015-ts_smoke10_dl_results.csv")
