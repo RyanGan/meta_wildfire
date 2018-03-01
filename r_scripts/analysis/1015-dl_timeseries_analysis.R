@@ -41,29 +41,41 @@ exp_out_combo <- expand.grid(exposure, outcomes) %>% arrange(Var1)
 county_pm_ts <- read_csv("./data/smoke/1015-county_popwt_pm.csv")
 
 # binary smoke lagged dataframe
-smoke10_lag <- county_pm_ts %>% 
+smoke_lag <- county_pm_ts %>% 
   filter(str_sub(fips,start=1,end=2) %in% c("08", "53")) %>% 
-  select(fips, date, smoke10) %>% 
+  select(fips, date, smoke10, smoke15, smoke_wave) %>% 
   arrange(fips, date) %>% 
   group_by(fips) %>% 
-  mutate(smk_lag1 = lag(smoke10, 1, order_by = fips),
-         smk_lag2 = lag(smoke10, 2, order_by = fips),
-         smk_lag3 = lag(smoke10, 3, order_by = fips),
-         smk_lag4 = lag(smoke10, 4, order_by = fips),         
-         smk_lag5 = lag(smoke10, 5, order_by = fips),
-         smk_lag6 = lag(smoke10, 6, order_by = fips))
+  mutate(smoke10_lag1 = lag(smoke10, 1, order_by = fips),
+         smoke10_lag2 = lag(smoke10, 2, order_by = fips),
+         smoke10_lag3 = lag(smoke10, 3, order_by = fips),
+         smoke10_lag4 = lag(smoke10, 4, order_by = fips),         
+         smoke10_lag5 = lag(smoke10, 5, order_by = fips),
+         smoke10_lag6 = lag(smoke10, 6, order_by = fips),
+         # smoke 15
+         smoke15_lag1 = lag(smoke15, 1, order_by = fips),
+         smoke15_lag2 = lag(smoke15, 2, order_by = fips),
+         smoke15_lag3 = lag(smoke15, 3, order_by = fips),
+         smoke15_lag4 = lag(smoke15, 4, order_by = fips),         
+         smoke15_lag5 = lag(smoke15, 5, order_by = fips),
+         smoke15_lag6 = lag(smoke15, 6, order_by = fips),
+         # smoke wave
+         smoke_wave_lag1 = lag(smoke_wave, 1, order_by = fips),
+         smoke_wave_lag2 = lag(smoke_wave, 2, order_by = fips),
+         smoke_wave_lag3 = lag(smoke_wave, 3, order_by = fips),
+         smoke_wave_lag4 = lag(smoke_wave, 4, order_by = fips),         
+         smoke_wave_lag5 = lag(smoke_wave, 5, order_by = fips),
+         smoke_wave_lag6 = lag(smoke_wave, 6, order_by = fips))
 
 
 # join with morbidity data
 ts_lag <- ts %>%
-  select(-smoke10) %>% 
-  left_join(smoke10_lag, by = c("fips", "date")) %>% 
+  select(-c(smoke10, smoke15, smoke_wave)) %>% 
+  left_join(smoke_lag, by = c("fips", "date")) %>% 
   filter(complete.cases(.)) 
 
+glimpse(ts_lag)
 # parallel distributed lag computing ----
-# output matrix of smoke and lag variables
-smk_matrix <- as.matrix(select(ts_lag, smoke10:smk_lag6))
-
 # set up cluster of 8 cores to parallelize models
 cores <- parallel::detectCores()
 # check to see if cores detected
@@ -77,10 +89,9 @@ clusterCall(cl, function() c(library(tidyverse), library(lme4),
                              library(splines)))
 
 # export new set of objects to global objects to cluster
-clusterExport(cl, c("ts_lag", "smk_matrix", "outcomes", "exposure", 
-                    "exp_out_combo"), 
+clusterExport(cl, c("ts_lag", "outcomes", "exposure", "exp_out_combo"), 
               envir = .GlobalEnv)
-# Distributed lag association for smoke10 --------------------------------------
+# Distributed lag association for smoke ----------------------------------------
 # start time
 start <- Sys.time()
 
@@ -89,6 +100,11 @@ smoke_dl_results <- parApply(cl, exp_out_combo,1, function(x){
   # define outcome and exposure
   outcome <- x[2]
   exposure <- x[1]
+  
+  # output matrix of smoke and lag variables; this could probably be done outside
+  # apply statement, but I'd have to use two apply statements
+  smk_matrix <- as.matrix(select(ts_lag, contains(exposure)))
+
   # define basis b using natural spline function
   smk_b <- ns(0:(ncol(smk_matrix)-1), df = 3, intercept = T)
   # multiply lagged pm matrix by basis
@@ -152,6 +168,8 @@ smoke_dl_results <- parApply(cl, exp_out_combo,1, function(x){
                             "lower95","upper95") 
   # bind lag and cumulative estimates together
   return_estimate <- rbind(c_estimate, l_estimate)
+  # print check
+  print(return_estimate)
   # return estimate  
   return(return_estimate)
   }) %>%   # end parLapply
