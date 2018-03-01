@@ -110,9 +110,9 @@ smoke_dl_results <- parApply(cl, exp_out_combo,1, function(x){
   # multiply lagged pm matrix by basis
   smk_basis <- smk_matrix %*% smk_b
   # fit mixed model
-  mod <- glmer(as.formula(paste0(outcome,"~", exposure, 
-    "smk_basis + as.factor(weekend) + state + as.factor(month) +",
-     "as.factor(year) + (1|fips) + offset(log(population))")),
+  mod <- glmer(as.formula(paste0(outcome,"~ smk_basis + as.factor(weekend) + ",
+    "state + as.factor(month) + as.factor(year) + (1|fips) + ",
+    "offset(log(population))")),
                family = "poisson"(link="log"), data = ts_lag,
                control = glmerControl(optimizer = "bobyqa"))
 
