@@ -77,7 +77,8 @@ clusterCall(cl, function() c(library(tidyverse), library(lme4),
                              library(splines)))
 
 # export new set of objects to global objects to cluster
-clusterExport(cl, c("ts_lag", "smk_matrix", "outcomes", "exposure"), 
+clusterExport(cl, c("ts_lag", "smk_matrix", "outcomes", "exposure", 
+                    "exp_out_combo"), 
               envir = .GlobalEnv)
 # Distributed lag association for smoke10 --------------------------------------
 # start time
