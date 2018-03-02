@@ -1,0 +1,23 @@
+---
+title: "Classifying County-Level Wildfire Smoke"
+author: "Ryan Gan"
+date: "2018-03-02"
+output: html_notebook
+editor_options: 
+  chunk_output_type: inline
+---
+
+I need a way to efficiently classify if a county was impacted by smoke. I plan to use population-weighted PM~2.5~, air quality index, temperature, and HMS for each county to do this. 
+
+I also want to assemble data that I may consider a "true" indications of smoke, where I'll look at news reports and public health warnings that specifically mention smoke has caused harmful air quality days. I would then like to ocmpare how accurate my classifiers are against these measures of truth.
+
+```{r setup}
+# knitr options
+knitr::opts_chunk$set(fig.width=8, fig.height=6, 
+                      warning=FALSE, message=FALSE)
+
+# libary
+library(tidyverse)
+```
+
+Import Kriged PM~2.5~ data.
