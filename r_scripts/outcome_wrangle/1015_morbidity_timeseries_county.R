@@ -4,6 +4,11 @@
 # Date Created: 2018-02-27
 # ------------------------------------------------------------------------------
 
+# This script combines estimated population-weighted PM2.5, temperature, HMS,
+# and air quality index data to create a time series from 2010 to 2015.
+# I am considering extending this to 2006 to 2010; I would need to process
+# temperature data.
+
 # library ----
 library(tidyverse)
 
@@ -11,7 +16,7 @@ library(tidyverse)
 # pm file path
 pm_file_path <- paste0("./data/smoke/krig_county_popwt/")
 
-# importing pm2.5 data 2010 to 2015
+# importing pm2.5 data 2006 to 2015
 # krig pm  dataframe
 krig_pm <- (list.files(pm_file_path, pattern="krig_pm")[5:10]) %>%  
   # read in each csv file
@@ -48,19 +53,36 @@ temp <- list.files(paste0("./data/smoke/county_air_temp/")) %>%
                    temp_f = round(temp_k * (9/5) - 459.67, 2)))
 
 # state fp code to join
-state_fp <- sort(unique(str_sub(krig_pm$fips, start = 1, end =2)))
+state_fip <- sort(unique(str_sub(krig_pm$fips, start = 1, end =2)))
 # state character name
 state <- c("Arizona", "California", "Colorado", "Idaho", "Montana",
            "Nevada", "New Mexico", "Oregon", "Utah", "Washington", "Wyoming")
 # create key
-state_key <- data.frame(cbind(state_fp, state)) %>% 
+state_key <- data.frame(cbind(state_fip, state)) %>% 
   mutate_if(is.factor, as.character)
 
+# read in AQI data
+aqi <- list.files(paste0("./data/smoke/aqi/"))[2:7] %>% 
+  map(~read_csv(paste0("./data/smoke/aqi/", .))) %>% 
+  map_dfr(., bind_rows) %>% 
+  rename(state = 'State Name', county = 'county Name', state_fp = 'State Code',
+         county_fp = 'County Code', date = Date, aqi = AQI, aqi_cat = Category,
+         aqi_param = 'Defining Parameter', aqi_site = 'Defining Site', 
+         aqi_site_n = 'Number of Sites Reporting') %>% 
+  filter(state_fp %in% state_fip) %>% 
+  mutate(fips = paste0(state_fp, county_fp))  %>% 
+  select(-state, -county)
+
+# aqi is not as long as my other dataframes; possible some county aqi is not 
+# collected or dates are missing
+
 # join all exposure values by fips and date
-county_pm_ts <- list(krig_pm, bg_pm, hms, temp) %>% 
+county_pm_ts <- list(krig_pm, bg_pm, hms, temp, aqi) %>% 
   # bind list together
   reduce(function(df1,df2)left_join(df1,df2, by = c("fips", "date"))) %>% 
-  mutate(month = lubridate::month(date),
+  mutate(month = as.factor(lubridate::month(date)),
+         year = as.factor(lubridate::year(date)),
+         day = as.factor(weekdays(date)),
          pm_krig = ifelse(pm_krig < 0, 0, pm_krig), # set values lower than 0 to 0
          # create smoke pm variable
          pm_smk = ifelse(pm_krig - bg_pm > 0, pm_krig - bg_pm, 0),
@@ -69,18 +91,17 @@ county_pm_ts <- list(krig_pm, bg_pm, hms, temp) %>%
          smoke5 = ifelse(pm_smk > 5 & month %in% c(5:9), 1, 0), 
          smoke10 = ifelse(pm_smk > 10 & month %in% c(5:9), 1, 0),
          smoke15 = ifelse(pm_smk > 15 & month %in% c(5:9), 1, 0),
-         # create state variables based on fips codes
-         state_fp = as.character(str_sub(fips, start = 1, end = 2))) %>% 
-  # join state names in
-  left_join(state_key, by = "state_fp") %>% 
+         state_fip = str_sub(fips, start=1, end=2)) %>% 
+  left_join(state_key, by = "state_fip") %>% 
   # create smoke wave (98th perctile for 2 days)
   group_by(fips) %>% 
   arrange(fips, date) %>% 
   mutate(high_pm_day = ifelse(pm_krig >= 22.31, 1, 0),
          smoke_wave = ifelse(lag(high_pm_day, order_by = fips)==1 &
                                high_pm_day==1 & month %in% c(5:9), 1, 0)) %>% 
-  select(state, state_fp, fips, date, month, pm_krig, bg_pm, pm_smk, hms, temp_k,
-         temp_f, smoke0, smoke5, smoke10, smoke15, high_pm_day, smoke_wave)
+  select(state, fips, date, day, month, year, pm_krig, bg_pm, pm_smk, hms, temp_k,
+         temp_f, aqi, aqi_cat, aqi_param, aqi_site, aqi_site_n, smoke0, smoke5, 
+         smoke10, smoke15, high_pm_day, smoke_wave)
 
 # write csv file for rish
 write_csv(county_pm_ts, "./data/smoke/1015-county_popwt_pm.csv")
@@ -150,12 +171,14 @@ morbidity_ts <- bind_rows(co_ts, wa_ts) %>%
   left_join(pop_denom, by = c("fips", "year")) %>% 
   # join pm
   left_join(county_pm_ts, by = c("fips", "date")) %>% 
-  select(state, state_fp, fips, county, date, year, population,
+  rename(year = year.x) %>% 
+  select(state, county, fips, date, day, month, year, population,
          resp:cardiopulm_n, pm_krig:smoke_wave)
 
 # note Washington missing values for washington 2010 dates that I don't have
 # health outcomes data for
-glimpse(morbidity_ts)
+glimpse(morbidity_ts) 
+summary(morbidity_ts)
 # write file
 write_csv(morbidity_ts, "./data/health/1015-morbidity_pm_ts.csv")
 
