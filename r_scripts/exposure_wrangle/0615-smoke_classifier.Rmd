@@ -20,4 +20,151 @@ knitr::opts_chunk$set(fig.width=8, fig.height=6,
 library(tidyverse)
 ```
 
-Import Kriged PM~2.5~ data.
+Import 2010-2015 county PM and air quality data.
+
+```{r pm_import}
+pm <- read_csv("../../data/smoke/1015-county_popwt_pm.csv") %>% 
+  mutate(hms_percent = hms*100,
+         smoke10_hms = ifelse(smoke10 == 1 & hms > 0.50, 1, 0),
+         smoke15_hms = ifelse(smoke15 == 1 & hms > 0.50, 1, 0),
+         smokewv_hms = ifelse(smoke_wave == 1 & hms > 0.50, 1, 0),
+         aqi_hms = ifelse(aqi_cat != "Good" & hms > 0.50, 1, 0))
+
+xtabs(~smoke10_hms + smoke10, data = pm)
+
+xtabs(~smokewv_hms + smoke15_hms, data = pm)
+xtabs(~aqi_cat, data = pm)
+xtabs(~aqi_hms + smoke15_hms, data = pm)
+```
+
+```{r aqi}
+ggplot(pm, aes(x=date,y=aqi)) +
+  geom_point() +
+  facet_wrap(~state) +
+  ylim(0, 1000)
+```
+
+```{r}
+ggplot(pm, aes(x=hms, y=aqi)) +
+  geom_point() +
+  facet_wrap(~month) +
+  ylim(0,500)
+
+ggplot(pm, aes(x=hms, y=temp_f)) +
+  geom_point() +
+  facet_wrap(~month) 
+
+ggplot(pm, aes(x=hms, y=pm_krig)) +
+  geom_point() +
+  facet_wrap(~month) 
+
+mod <- lm(pm_krig ~ hms_percent , data=pm)
+summary(mod)
+
+xtabs(~smoke15 + aqi_cat, data=pm)
+```
+
+```{r colorado_4mile}
+check <- pm %>% 
+  filter(state == "Colorado" & year == 2010 & fips == "08013") %>% 
+  select(date, pm_krig, pm_smk, aqi, hms_percent) %>% 
+  gather("exposure", "value", -date) %>% 
+  filter(date >= "2010-09-01" & date <= "2010-10-01")
+
+ggplot(check, aes(x=date, y=value)) +
+  geom_point() +
+  facet_wrap(~exposure, scales = "free_y") +
+  theme_minimal()
+
+flag_4mile <- pm %>% 
+  filter(state == "Colorado") %>% 
+  filter(date >= "2010-09-01" & date <= "2010-10-01") %>% 
+  mutate(flag = ifelse(hms > 0 & pm_smk > 5, 1, 0)) %>% 
+  filter(flag ==1)
+```
+
+Flags of big fires.
+```{r}
+# 4 mile
+flag_4mile <- pm %>% 
+  filter(state == "Colorado") %>% 
+  filter(date >= "2010-09-06" & date <= "2010-09-17") %>% 
+  mutate(flag = ifelse(hms > 0.50 & 
+    !(aqi_cat %in% c("Good", "Moderate", NA)), 1, 0)) %>% 
+  filter(flag ==1) %>% 
+  mutate(fire = "four_mile") %>% 
+  select(state, fips, date, hms, pm_krig, aqi_cat, flag, fire)
+
+# rim fire
+flag_rim <- pm %>% 
+  filter(state %in% c("California", "Nevada")) %>% 
+  filter(date >= "2013-08-17" & date <= "2013-10-25") %>% 
+  mutate(flag = ifelse(hms > 0.50 & 
+    !(aqi_cat %in% c("Good", "Moderate", NA)), 1, 0)) %>% 
+  filter(flag ==1) %>% 
+  mutate(fire = "rim") %>% 
+  select(state, fips, date, hms, pm_krig, aqi_cat, flag, fire)
+
+# central idaho
+flag_cen_id <- pm %>% 
+  filter(state %in% c("Idaho")) %>% 
+  filter(date >= "2013-08-12" & date <= "2013-08-21") %>% 
+  mutate(flag = ifelse(hms > 0.50 & 
+    !(aqi_cat %in% c("Good", "Moderate", NA)), 1, 0)) %>% 
+  filter(flag ==1) %>% 
+  mutate(fire = "cen_idaho") %>% 
+  select(state, fips, date, hms, pm_krig, aqi_cat, flag, fire)
+
+# douglas complex
+flag_doug <- pm %>% 
+  filter(state %in% c("Oregon")) %>% 
+  filter(date >= "2013-07-25" & date <= "2013-09-05") %>% 
+  mutate(flag = ifelse(hms > 0.50 &
+    !(aqi_cat %in% c("Good", "Moderate", NA)), 1, 0)) %>% 
+  filter(flag ==1) %>% 
+  mutate(fire = "douglas_complex") %>% 
+  select(state, fips, date, hms, pm_krig, aqi_cat, flag, fire)
+
+# 2012 washington fires
+flag_wen <- pm %>% 
+  filter(state %in% c("Washington", "Idaho", "Oregon")) %>% 
+  filter(date >= "2012-09-07" & date <= "2012-09-30") %>% 
+  mutate(flag = ifelse(hms > 0.50 & 
+    !(aqi_cat %in% c("Good", "Moderate", NA)), 1, 0)) %>% 
+  filter(flag ==1) %>% 
+  mutate(fire = "wenatchee") %>% 
+  select(state, fips, date, hms, pm_krig, aqi_cat, flag, fire)
+
+#  2012 idaho
+flag_id12 <- pm %>% 
+  filter(state %in% c("Montana", "Idaho", "Wyoming")) %>% 
+  filter(date >= "2012-08-11" & date <= "2012-09-16") %>% 
+  mutate(flag = ifelse(hms > 0.50 & 
+    !(aqi_cat %in% c("Good", "Moderate", NA)), 1, 0)) %>% 
+  filter(flag ==1) %>% 
+  mutate(fire = "idaho2012") %>% 
+  select(state, fips, date, hms, pm_krig, aqi_cat, flag, fire)
+
+# high park
+flag_hp <- pm %>% 
+  filter(state %in% c("Colorado", "Wyoming")) %>% 
+  filter(date >= "2012-08-11" & date <= "2012-09-16") %>% 
+  mutate(flag = ifelse(hms > 0.50 & 
+    !(aqi_cat %in% c("Good", "Moderate", NA)), 1, 0)) %>% 
+  filter(flag ==1) %>% 
+  mutate(fire = "idaho2012") %>% 
+  select(state, fips, date, hms, pm_krig, aqi_cat, flag, fire)
+
+# check
+check <- flag_rim %>% 
+  select(date, fips, pm_krig, pm_smk, aqi, hms_percent) %>% 
+  gather("exposure", "value", -date, -fips) 
+
+ggplot(check, aes(x=date, y=value, group=fips)) +
+  geom_point() +
+  facet_wrap(~exposure, scales = "free_y") +
+  theme_minimal()
+
+
+```
+
