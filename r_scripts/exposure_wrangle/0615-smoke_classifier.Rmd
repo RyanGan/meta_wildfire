@@ -83,8 +83,9 @@ flag_4mile <- pm %>%
   filter(flag ==1)
 ```
 
-Flags of big fires.
-```{r}
+Flagging counties that were likely affected by big fires listed in the grant. To be flagged, the county must be in a specific state listed, within the date range listed, and have an AQI of unhealthy for sensitive groups or higher.
+
+```{r flag_fire_smoke}
 # 4 mile
 flag_4mile <- pm %>% 
   filter(state == "Colorado") %>% 
@@ -148,23 +149,102 @@ flag_id12 <- pm %>%
 # high park
 flag_hp <- pm %>% 
   filter(state %in% c("Colorado", "Wyoming")) %>% 
-  filter(date >= "2012-08-11" & date <= "2012-09-16") %>% 
+  filter(date >= "2012-06-09" & date <= "2012-06-30") %>% 
   mutate(flag = ifelse(hms > 0.50 & 
     !(aqi_cat %in% c("Good", "Moderate", NA)), 1, 0)) %>% 
   filter(flag ==1) %>% 
-  mutate(fire = "idaho2012") %>% 
+  mutate(fire = "high_park") %>% 
   select(state, fips, date, hms, pm_krig, aqi_cat, flag, fire)
 
-# check
-check <- flag_rim %>% 
-  select(date, fips, pm_krig, pm_smk, aqi, hms_percent) %>% 
-  gather("exposure", "value", -date, -fips) 
+# fire flags
+smoke_train <- mget(grep("flag", names(.GlobalEnv), value=TRUE)) %>% 
+  map_dfr(., bind_rows) 
+```
 
-ggplot(check, aes(x=date, y=value, group=fips)) +
-  geom_point() +
-  facet_wrap(~exposure, scales = "free_y") +
-  theme_minimal()
+Now that I have possible smoke-impacted dates for county, I'd like to find referent periods. 
+Take counties that likely were impacted by smoke and bind it back in to the time series for those counties.
+
+```{r}
+# find unique dates
+smoke_dates <- smoke_train %>% 
+  group_by(fips, date) %>% 
+  summarise(n = n()) %>% 
+  select(fips,date) %>% 
+  as.matrix()
+
+# find ref dates to output
+fips_ref_dates <- apply(smoke_dates, 1, function(x){
+  before <- as.Date(x[2], format = "%Y-%m-%d") %m-% months(1:12)
+  after <- as.Date(x[2], format = "%Y-%m-%d") %m+% months(1:12)
+  ref_date <- as.character(c(after, before)) 
+  fips <- rep(x[1], length(ref_date))
+  fips_ref_date <- data.frame(fips, ref_date)
+  return(fips_ref_date)
+      }
+    ) %>% 
+  rbind_list() %>% 
+  mutate(date = as.Date(ref_date))%>% 
+  select(fips, date) %>% 
+  left_join(pm, by = c("fips", "date")) %>% 
+  mutate(flag = ifelse(hms < 0.10 & smoke15 == 0, 0, 1))
+
+glimpse(fips_ref_dates)
+
+fips_ts <- smoke_train %>% 
+  select(fips, date, flag, fire) %>% 
+  left_join(pm, by = c("fips", "date")) %>% 
+  bind_rows(fips_ref_dates) %>% 
+  arrange(fips, date) %>% 
+  mutate(smoke_true = if_else(flag == 1, 1, 0),
+         month = as.factor(month))
+
+glimpse(fips_ts)
+```
+
+```{r test_mod}
+train <- fips_ts %>% 
+  filter(state != "California")
+
+test <- fips_ts %>% 
+  filter(state == "California")
 
 
+
+library(randomForest)
+
+summary(train)
+xtabs(~smoke_true, data = train)
+
+# model without aqi
+rf_mod <- randomForest(as.factor(smoke_true) ~ pm_krig + bg_pm + 
+  pm_smk + hms + temp_f + month, 
+  data=train, importance=TRUE, ntree=500)
+
+varImpPlot(rf_mod)
+
+# predict cali fires
+cali_pred <- predict(rf_mod, test)
+
+# join with test
+test2 <- cbind(test, cali_pred)
+
+xtabs(~cali_pred + smoke_true, test2)
+xtabs(~smoke_wave + smoke_true, test2)
+xtabs(~smoke15 + smoke_true, test2)
+
+colorado_2015 <- pm %>% 
+  filter(state == "Colorado" & year == 2015) %>% 
+  mutate(month = as.factor(month))
+
+glimpse(colorado_2015)
+colorado_2015$smoke_pred <- predict(rf_mod, colorado_2015)
+
+xtabs(~ smoke_pred + smoke_wave, colorado_2015)
+
+co_smk_check <- colorado_2015 %>% 
+  filter(smoke_pred == 1) %>% 
+  filter(fips == "08069")
+
+xtabs(~aqi_cat, co_smk_check)
 ```
 
