@@ -1,0 +1,212 @@
+---
+title: "Distributed Lag with Interaction"
+author: "Ryan Gan"
+date: "3/7/2018"
+output: html_document
+---
+
+Code to be broken up.
+```{r setup, include=FALSE}
+
+
+# libraries ----
+library(tidyverse)
+library(lme4) # loading lme4 mixed model package
+library(splines)
+library(parallel)
+
+# read in time series ----
+ts <- read_csv("./data/health/1015-morbidity_pm_ts.csv") %>% 
+  filter(!is.na(pm_krig)) %>% 
+  mutate(day = as.factor(weekdays(date)),
+         weekend = ifelse(day %in% c("Saturday", "Sunday"), 1, 0),
+         month = as.factor(lubridate::month(date)),
+         year = as.factor(lubridate::year(date)),
+         season = as.factor(case_when(month %in% c(12, 1, 2) ~ "winter",
+                                      month %in% c(3:5) ~ "spring",
+                                      month %in% c(6:8) ~ "summer",
+                                      month %in% c(9:11)~ "fall")),
+         smoke10_hms = if_else(smoke10 == 1 & hms > 0.1, 1, 0),
+         smoke15_hms = if_else(smoke15 == 1 & hms > 0.1, 1, 0))
+
+# same-day association of binary smoke variables, accounting for county, poulation
+# month, year, state, weekend
+# vector of names of outcomes to regress
+
+outcomes <- c("resp", "asthma", "copd", "acute_bronch", "pneum", "cvd", 
+              "arrhythmia", "cereb_vas", "hf", "ihd", "mi", "cardiopulm_n")
+
+
+exposure <- c("smoke10", "smoke15", "smoke_wave")
+# expand grid so each outcome/exposure combo is modeled 
+exp_out_combo <- expand.grid(exposure, outcomes) %>% arrange(Var1)
+
+# read county pm timeseries
+county_pm_ts <- read_csv("./data/smoke/1015-county_popwt_pm.csv")
+
+# binary smoke lagged dataframe
+smoke_lag <- county_pm_ts %>% 
+  filter(str_sub(fips,start=1,end=2) %in% c("08", "53")) %>% 
+  select(fips, date, hms, smoke10, smoke15, smoke_wave) %>% 
+  mutate(smoke10_hms = if_else(smoke10 == 1 & hms > 0.1, 1, 0),
+         smoke15_hms = if_else(smoke15 == 1 & hms > 0.1, 1, 0)) %>% 
+  arrange(fips, date) %>% 
+  group_by(fips) %>% 
+  mutate(smoke10_hms_lag1 = lag(smoke10_hms, 1, order_by = fips),
+         smoke10_hms_lag2 = lag(smoke10_hms, 2, order_by = fips),
+         smoke10_hms_lag3 = lag(smoke10_hms, 3, order_by = fips),
+         smoke10_hms_lag4 = lag(smoke10_hms, 4, order_by = fips),         
+         smoke10_hms_lag5 = lag(smoke10_hms, 5, order_by = fips),
+         smoke10_hms_lag6 = lag(smoke10_hms, 6, order_by = fips),
+         # smoke 15
+         smoke15_hms_lag1 = lag(smoke15_hms, 1, order_by = fips),
+         smoke15_hms_lag2 = lag(smoke15_hms, 2, order_by = fips),
+         smoke15_hms_lag3 = lag(smoke15_hms, 3, order_by = fips),
+         smoke15_hms_lag4 = lag(smoke15_hms, 4, order_by = fips),         
+         smoke15_hms_lag5 = lag(smoke15_hms, 5, order_by = fips),
+         smoke15_hms_lag6 = lag(smoke15_hms, 6, order_by = fips),
+         # smoke wave
+         smoke_wave_lag1 = lag(smoke_wave, 1, order_by = fips),
+         smoke_wave_lag2 = lag(smoke_wave, 2, order_by = fips),
+         smoke_wave_lag3 = lag(smoke_wave, 3, order_by = fips),
+         smoke_wave_lag4 = lag(smoke_wave, 4, order_by = fips),         
+         smoke_wave_lag5 = lag(smoke_wave, 5, order_by = fips),
+         smoke_wave_lag6 = lag(smoke_wave, 6, order_by = fips))
+
+pm_lag <- county_pm_ts %>% 
+  filter(str_sub(fips,start=1,end=2) %in% c("08", "53")) %>% 
+  select(fips, date, pm_krig) %>% 
+  arrange(fips, date) %>% 
+  group_by(fips) %>% 
+  mutate(pm_lag1 = lag(pm_krig, 1, order_by = fips),
+         pm_lag2 = lag(pm_krig, 2, order_by = fips),
+         pm_lag3 = lag(pm_krig, 3, order_by = fips),
+         pm_lag4 = lag(pm_krig, 4, order_by = fips),         
+         pm_lag5 = lag(pm_krig, 5, order_by = fips),
+         pm_lag6 = lag(pm_krig, 6, order_by = fips))
+
+
+# join with morbidity data
+ts_lag <- ts %>%
+  filter(fips == "53007") %>% 
+  select(-c(pm_krig, smoke10, smoke15, smoke10_hms, smoke15_hms, 
+            hms, smoke_wave)) %>% 
+  left_join(smoke_lag, by = c("fips", "date")) %>% 
+  left_join(pm_lag, by = c("fips", "date")) %>% 
+  filter(complete.cases(.)) %>% 
+  arrange(fips, date) %>% 
+  mutate(hms_percent = hms *100)
+
+# test interaction -------------------------------------------------------------
+pm_matrix <- as.matrix(select(ts_lag, pm_krig, contains("pm_lag")))/10
+smoke_matrix <- as.matrix(select(ts_lag, contains("smoke10_hms")))
+
+# note this code differs slightly from what Ander provided as I couldn't quite
+# get it to work based on code, but this shoudl do what he suggested
+
+time_spl <- ns(ts_lag$date, df = 24)
+
+ts_lag$pm_pred <- predict(lm(pm_krig ~ time_spl, data=ts_lag), type="response")
+
+ggplot(ts_lag, aes(x=date,y=pm_krig)) +
+  geom_point() +
+  geom_point(aes(x=date, y=hms_percent), color = "blue") +
+  geom_line(aes(x=date, y=pm_pred), color="red")
+
+
+# define basis b using natural spline function
+exp_b <- ns(0:(ncol(pm_matrix)-1), df = 3, intercept = T)
+# multiply lagged pm matrix by basis
+pm_basis <- pm_matrix %*% exp_b
+smk_basis <- smoke_matrix %*% exp_b
+# basis for pm in the presence of smoke
+pm_basis_smk <- pm_basis * smk_basis
+# basis for pm without smoke
+pm_basis_nosmk <- pm_basis * ifelse(smk_basis == 1, 0, 1)
+
+# simple model trying out ander's interaction code
+mod <- glm(asthma ~ pm_basis_smk + pm_basis_nosmk + time_spl,
+           data = ts_lag, 
+           family = "poisson"(link="log"))
+
+summary(mod)
+
+# calculate estimates ----
+# output pm basis parameters
+smk_parms <- broom::tidy(mod) %>% 
+  filter(stringr::str_detect(term, "_smk")) %>% 
+  select(estimate) %>% 
+  as_vector()
+# extract names
+smk_names <- broom::tidy(mod) %>% 
+  filter(stringr::str_detect(term, "_smk")) %>% 
+  select(term) %>% 
+  as_vector()
+# no smoke basis params
+nosmk_parms <- broom::tidy(mod) %>% 
+  filter(stringr::str_detect(term, "_nosmk")) %>% 
+  select(estimate) %>% 
+  as_vector()
+# no smoke names
+nosmk_names <- broom::tidy(mod) %>% 
+  filter(stringr::str_detect(term, "_nosmk")) %>% 
+  select(term) %>% 
+  as_vector()
+
+# estimate distributed lag values for each day
+smk_estimate <- exp_b %*% smk_parms
+nosmk_estimate <- exp_b %*% nosmk_parms
+
+# time variable
+time <- ((rep(1:length(smk_estimate))-1))
+# covariance matrix for knots 
+smk_cov_matrix <- as.matrix(vcov(mod))[smk_names, smk_names]
+nosmk_cov_matrix <- as.matrix(vcov(mod))[nosmk_names, nosmk_names]
+# estimate variance of spline
+smk_variance <- exp_b %*% smk_cov_matrix %*% t(exp_b)
+nosmk_variance <- exp_b %*% nosmk_cov_matrix %*% t(exp_b)
+
+# estimate cumulative ----
+c_type <- as.character(rep("cumulative", times = length(smk_estimate)*2))
+# smoke strata
+smk_strata <- as.character(c(rep("Yes", times = length(smk_estimate)),
+  rep("No", times=length(smk_estimate))))
+
+# sequential cumulative estimate
+# smoke cumulative estimates
+smk_c_est <- sapply(seq_along(smk_estimate), function(x){
+  sum(smk_estimate[1:x])
+})
+# nosmoke cumulative estimates
+nosmk_c_est <- sapply(seq_along(nosmk_estimate), function(x){
+  sum(nosmk_estimate[1:x])
+})
+
+cbind(smk_c_est, nosmk_c_est)
+# stderr cumulative effect smk
+smk_c_se <- sapply(seq_along(smk_c_est), function(y){
+  sqrt(sum(smk_variance[1:y,1:y]))
+})
+# stderr cumulative effect nosmk
+nosmk_c_se <- sapply(seq_along(nosmk_c_est), function(y){
+  sqrt(sum(nosmk_variance[1:y,1:y]))
+})
+
+# cumulative 95CI
+c_smk_l95 <- smk_c_est+(smk_c_se*qnorm(1-0.975))
+c_smk_u95 <- smk_c_est+(smk_c_se*qnorm(0.975))
+# no smoke
+c_nosmk_l95 <- nosmk_c_est+(nosmk_c_se*qnorm(1-0.975))
+c_nosmk_u95 <- nosmk_c_est+(nosmk_c_se*qnorm(0.975))
+# return dataframe
+c_estimate <- data.frame(outcome, c_type, smk_strata, time, 
+  exp(c(smk_c_est, nosmk_c_est)), exp(c(c_smk_l95, c_nosmk_l95)), 
+  exp(c(c_smk_u95, c_nosmk_u95)), row.names = NULL)
+
+# assign column names
+colnames(c_estimate) <- c("outcome", "type", "smoke", "time","estimate",
+                          "lower95","upper95") 
+
+
+# end test interaction ---------------------------------------------------------
+```
