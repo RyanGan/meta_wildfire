@@ -207,7 +207,7 @@ distributed_lag <- function(data, exp_mat, outcome,
   pm_basis <- exp_mat %*% pm_b
   # fit mixed model
   mod <- glmer(as.formula(paste0(outcome, 
-                                 "~pm_basis + pm_spline + weekend + (1|fips) + offset(log(population))")),
+      "~pm_basis + pm_spline + weekend + (1|fips) + offset(log(population))")),
                data, family="poisson"(link="log"), 
                control = glmerControl(optimizer = "bobyqa"))
   
