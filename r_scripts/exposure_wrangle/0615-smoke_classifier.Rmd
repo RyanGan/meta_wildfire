@@ -261,7 +261,7 @@ fips_ref_dates <- apply(smoke_dates, 1, function(x){
   mutate(date = as.Date(ref_date))%>% 
   select(fips, date) %>% 
   left_join(pm, by = c("fips", "date")) %>% 
-  mutate(flag = ifelse(hms < 0.10, 0, 1))
+  mutate(flag = ifelse(hms < 0.25 & pm_diff < 10, 0, 1))
 ```
 
 Now I'm going to extract flagged smoke and non-smoke dates and build a fips time series data to train and validate prediction algorithms on.
@@ -280,7 +280,6 @@ fips_ts <- smoke_train %>%
 Before I apply an algorithm, I'm going to see how well our existing classifiers perform against the "true" smoke measure. 
 
 ```{r accuracy}
-glimpse(fips_ts)
 acc_results <- c("smoke0", "smoke5", "smoke10", "smoke15", "smoke_wave",
                  "smoke10_hms", "smoke15_hms", "smokewv_hms", "aqi_hms") %>% 
   map_dfr(., function(x){
