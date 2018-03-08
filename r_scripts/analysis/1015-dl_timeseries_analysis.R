@@ -13,9 +13,10 @@ library(lme4) # loading lme4 mixed model package
 library(splines)
 library(parallel)
 
-# read in time series ----
+# read in time series and limit to colorado and washington ----
 ts <- read_csv("./data/health/1015-morbidity_pm_ts.csv") %>% 
   filter(!is.na(pm_krig)) %>% 
+  rename(pm_diff = pm_smk) %>% 
   mutate(day = as.factor(weekdays(date)),
          weekend = ifelse(day %in% c("Saturday", "Sunday"), 1, 0),
          month = as.factor(lubridate::month(date)),
@@ -24,76 +25,60 @@ ts <- read_csv("./data/health/1015-morbidity_pm_ts.csv") %>%
                                       month %in% c(3:5) ~ "spring",
                                       month %in% c(6:8) ~ "summer",
                                       month %in% c(9:11)~ "fall")),
-         smoke10_hms = if_else(smoke10 == 1 & hms > 0.1, 1, 0),
-         smoke15_hms = if_else(smoke15 == 1 & hms > 0.1, 1, 0))
-
-# same-day association of binary smoke variables, accounting for county, poulation
-# month, year, state, weekend
-# vector of names of outcomes to regress
-
-outcomes <- c("resp", "asthma", "copd", "acute_bronch", "pneum", "cvd", 
-              "arrhythmia", "cereb_vas", "hf", "ihd", "mi", "cardiopulm_n")
-
-
-exposure <- c("smoke10", "smoke15", "smoke_wave")
-# expand grid so each outcome/exposure combo is modeled 
-exp_out_combo <- expand.grid(exposure, outcomes) %>% arrange(Var1)
+         smoke10_hms = if_else(pm_diff > 10 & month %in% c(3:11) & hms > 0.1,
+                               1, 0),
+         smoke15_hms = if_else(pm_diff > 15 & month %in% c(3:11) & hms > 0.1,
+                               1, 0))
 
 # read county pm timeseries
-county_pm_ts <- read_csv("./data/smoke/1015-county_popwt_pm.csv")
-
-# binary smoke lagged dataframe
-smoke_lag <- county_pm_ts %>% 
+county_pm_ts <- read_csv("./data/smoke/1015-county_popwt_pm.csv") %>% 
   filter(str_sub(fips,start=1,end=2) %in% c("08", "53")) %>% 
-  select(fips, date, hms, smoke10, smoke15, smoke_wave) %>% 
-  mutate(smoke10_hms = if_else(smoke10 == 1 & hms > 0.1, 1, 0),
-         smoke15_hms = if_else(smoke15 == 1 & hms > 0.1, 1, 0)) %>% 
-  arrange(fips, date) %>% 
-  group_by(fips) %>% 
-  mutate(smoke10_hms_lag1 = lag(smoke10_hms, 1, order_by = fips),
-         smoke10_hms_lag2 = lag(smoke10_hms, 2, order_by = fips),
-         smoke10_hms_lag3 = lag(smoke10_hms, 3, order_by = fips),
-         smoke10_hms_lag4 = lag(smoke10_hms, 4, order_by = fips),         
-         smoke10_hms_lag5 = lag(smoke10_hms, 5, order_by = fips),
-         smoke10_hms_lag6 = lag(smoke10_hms, 6, order_by = fips),
-         # smoke 15
-         smoke15_hms_lag1 = lag(smoke15_hms, 1, order_by = fips),
-         smoke15_hms_lag2 = lag(smoke15_hms, 2, order_by = fips),
-         smoke15_hms_lag3 = lag(smoke15_hms, 3, order_by = fips),
-         smoke15_hms_lag4 = lag(smoke15_hms, 4, order_by = fips),         
-         smoke15_hms_lag5 = lag(smoke15_hms, 5, order_by = fips),
-         smoke15_hms_lag6 = lag(smoke15_hms, 6, order_by = fips),
-         # smoke wave
-         smoke_wave_lag1 = lag(smoke_wave, 1, order_by = fips),
-         smoke_wave_lag2 = lag(smoke_wave, 2, order_by = fips),
-         smoke_wave_lag3 = lag(smoke_wave, 3, order_by = fips),
-         smoke_wave_lag4 = lag(smoke_wave, 4, order_by = fips),         
-         smoke_wave_lag5 = lag(smoke_wave, 5, order_by = fips),
-         smoke_wave_lag6 = lag(smoke_wave, 6, order_by = fips))
+  rename(pm_diff = pm_smk) %>% 
+  mutate(smoke10_hms = if_else(pm_diff > 10 & month %in% c(3:11) & hms > 0.1,
+                        1, 0),
+         smoke15_hms = if_else(pm_diff > 15 & month %in% c(3:11) & hms > 0.1,
+                      1, 0))
 
+# defining a lag function
+lags <- function(var, n=10){
+  var <- enquo(var)
+  
+  indices <- seq_len(n)
+  map( indices, ~quo(lag(!!var, !!.x)) ) %>% 
+    set_names(sprintf("%s_lag%d", rlang::quo_text(var), indices))
+  
+}
+
+# output krig pm lag matrix
 pm_lag <- county_pm_ts %>% 
   filter(str_sub(fips,start=1,end=2) %in% c("08", "53")) %>% 
-  select(fips, date, pm_krig) %>% 
+  select(fips, date, pm_krig, smoke10_hms, smoke15_hms) %>% 
   arrange(fips, date) %>% 
   group_by(fips) %>% 
-  mutate(pm_lag1 = lag(pm_krig, 1, order_by = fips),
-         pm_lag2 = lag(pm_krig, 2, order_by = fips),
-         pm_lag3 = lag(pm_krig, 3, order_by = fips),
-         pm_lag4 = lag(pm_krig, 4, order_by = fips),         
-         pm_lag5 = lag(pm_krig, 5, order_by = fips),
-         pm_lag6 = lag(pm_krig, 6, order_by = fips))
-
+  mutate(., !!!lags(pm_krig,6), !!!lags(smoke10_hms,6), !!!lags(smoke15_hms,6)) 
 
 # join with morbidity data
 ts_lag <- ts %>%
-  filter(fips == "53007") %>% 
-  select(-c(pm_krig, smoke10, smoke15, smoke10_hms, smoke15_hms, 
-            hms, smoke_wave)) %>% 
-  left_join(smoke_lag, by = c("fips", "date")) %>% 
+  select(-c(pm_krig, smoke10_hms, smoke15_hms)) %>% 
   left_join(pm_lag, by = c("fips", "date")) %>% 
-  filter(complete.cases(.)) %>% 
+  filter(!is.na(pm_krig_lag6)) %>% 
   arrange(fips, date) %>% 
   mutate(hms_percent = hms *100)
+
+# output pm lag matrix
+pm_mat <- as.matrix(select(ts_lag, contains("pm_krig")))/10
+
+# creating a matrix of outcomes and binary smoke combos to run
+# vector of names of outcomes to regress
+outcomes <- c("resp", "asthma", "copd", "acute_bronch", "pneum", "cvd", 
+              "arrhythmia", "cereb_vas", "hf", "ihd", "mi")
+
+exposure <- c("smoke10_hms", "smoke15_hms")
+# expand grid so each outcome/exposure combo is modeled 
+exp_out_combo <- expand.grid(binary_smoke, outcomes) %>% arrange(Var1)
+
+# define time spline to adjust for
+time_spl <- ns(ts_lag$date, df=24)
 
 # parallel distributed lag computing ----
 # set up cluster of 8 cores to parallelize models
@@ -109,7 +94,8 @@ clusterCall(cl, function() c(library(tidyverse), library(lme4),
                              library(splines)))
 
 # export new set of objects to global objects to cluster
-clusterExport(cl, c("ts_lag", "outcomes", "exposure", "exp_out_combo"), 
+clusterExport(cl, c("ts_lag", "outcomes", "exposure", "exp_out_combo", "pm_mat",
+                    "time_spl"), 
               envir = .GlobalEnv)
 
 # Distributed lag association for smoke ----------------------------------------
@@ -117,130 +103,145 @@ clusterExport(cl, c("ts_lag", "outcomes", "exposure", "exp_out_combo"),
 start <- Sys.time()
 
 # distributed lag function
-smoke_dl_results <- parApply(cl, exp_out_combo,1, function(x){
+smoke_dl_results <- parApply(cl, exp_out_combo, 1, function(x){
   # define outcome and exposure
   outcome <- x[2]
   exposure <- x[1]
-  
-  # output matrix of smoke and lag variables; this could probably be done outside
-  # apply statement, but I'd have to use two apply statements
-  exp_matrix <- as.matrix(select(ts_lag, contains(exposure)))
+
+  # output matrix of binary smoke
+  smk_mat <- as.matrix(select(ts_lag, contains(exposure)))
 
   # define basis b using natural spline function
-  exp_b <- ns(0:(ncol(exp_matrix)-1), df = 3, intercept = T)
+  exp_b <- ns(0:(ncol(smk_mat)-1), df = 4, intercept = T)
   # multiply lagged pm matrix by basis
-  smk_basis <- exp_matrix %*% exp_b
+  pm_basis <- pm_mat %*% exp_b
+  smk_basis <- smk_mat %*% exp_b
+  
+  # set up pm_smk and pm_nosmk basis
+  pm_smk_basis <- pm_basis * smk_basis
+  pm_nosmk_basis <- pm_basis * ifelse(smk_basis == 1, 0, 1)
   
   # fit mixed model
-  mod <- glmer(as.formula(paste0(outcome,"~ smk_basis + as.factor(weekend) + ",
-    "state + as.factor(month) + as.factor(year) + (1|fips) + ",
-    "offset(log(population))")),
+  mod <- glmer(as.formula(paste0(outcome,"~pm_smk_basis + pm_nosmk_basis +",
+                        "time_spl + as.factor(weekend) + state + (1|fips) + ",
+                        "offset(log(population))")),
                family = "poisson"(link="log"), data = ts_lag,
                control = glmerControl(optimizer = "bobyqa"))
+  # test mod
+  # mod <- glm(as.formula(paste0(outcome,"~pm_smk_basis + pm_nosmk_basis +", 
+  #    "time_spl + offset(log(population))")),
+  #     family = "poisson"(link="log"), data = ts_lag)
+  # 
+  # summary(mod)
   
   # calculate estimates ----
   # output pm basis parameters
-  dl_parms <- broom::tidy(mod) %>% 
-    filter(stringr::str_detect(term, "smk_basis")) %>% 
+  # calculate estimates ----
+  # output pm basis parameters
+  smk_parms <- broom::tidy(mod) %>% 
+    filter(stringr::str_detect(term, "pm_smk")) %>% 
     select(estimate) %>% 
     as_vector()
-  
-  # estimate distributed lag values for each day
-  estimate <-  smk_b %*% dl_parms
-  # time variable
-  time <- ((rep(1:length(estimate))-1))
-  # covariance matrix for knots 
-  # fix the matrix
-  cov_matrix <- as.matrix(vcov(mod))[2:(3+1), 2:(3+1)]
-  # estimate variance of spline
-  variance <- smk_b %*% cov_matrix %*% t(smk_b)
-  # estimate lag ----
-  # estimate standard error for each lag day
-  l_se <- sqrt(diag(variance))
-  # calculate lower and upper bound
-  l_lower95 <- estimate+(l_se*qnorm(1-0.975))
-  l_upper95 <- estimate+(l_se*qnorm(0.975))
-  l_type <- as.character(rep("lag", times = length(estimate)))
-  
-  # l_estimate
-  l_estimate <- data.frame(exposure, outcome, l_type, time, exp(estimate), 
-                           exp(l_lower95), exp(l_upper95), row.names = NULL) 
-  # assign column names
-  colnames(l_estimate) <- c("exposure", "outcome", "type","time", "estimate",
-                            "lower95","upper95") 
-  # estimate cumulative ----
-  c_type <- as.character(rep("cumulative", times = length(estimate)))
-  # sequential cumulative estimate
-  cumulative_estimate <- sapply(seq_along(estimate), function(x){
-    sum(estimate[1:x])
-  })
-  # stderr cumulative effect
-  cumulative_se <- sapply(seq_along(estimate), function(y){
-    sqrt(sum(variance[1:y,1:y]))
-  })
-  # cumulative 95CI
-  c_lower95 <- cumulative_estimate+(cumulative_se*qnorm(1-0.975))
-  c_upper95 <- cumulative_estimate+(cumulative_se*qnorm(0.975))
-  # return dataframe
-  c_estimate <- data.frame(exposure, outcome, c_type, time, 
-                           exp(cumulative_estimate), exp(c_lower95), 
-                           exp(c_upper95), row.names = NULL)
-  # assign column names
-  colnames(c_estimate) <- c("exposure", "outcome", "type","time","estimate",
-                            "lower95","upper95") 
-  # bind lag and cumulative estimates together
-  return_estimate <- rbind(c_estimate, l_estimate)
+  # extract names
+  smk_names <- broom::tidy(mod) %>% 
+    filter(stringr::str_detect(term, "pm_smk")) %>% 
+    select(term) %>% 
+    as_vector()
+  # no smoke basis params
+  nosmk_parms <- broom::tidy(mod) %>% 
+    filter(stringr::str_detect(term, "pm_nosmk")) %>% 
+    select(estimate) %>% 
+    as_vector()
+  # no smoke names
+  nosmk_names <- broom::tidy(mod) %>% 
+    filter(stringr::str_detect(term, "pm_nosmk")) %>% 
+    select(term) %>% 
+    as_vector()
 
-  # calculate estimates ----
-  # output pm basis parameters
-  dl_parms <- broom::tidy(mod) %>% 
-    filter(stringr::str_detect(term, "smk_basis")) %>% 
-    select(estimate) %>% 
-    as_vector()
-  
   # estimate distributed lag values for each day
-  estimate <-  smk_b %*% dl_parms
-  # time variable
-  time <- ((rep(1:length(estimate))-1))
-  # covariance matrix for knots 
-  # fix the matrix
-  cov_matrix <- as.matrix(vcov(mod))[2:(3+1), 2:(3+1)]
-  # estimate variance of spline
-  variance <- smk_b %*% cov_matrix %*% t(smk_b)
-  # estimate lag ----
-  # estimate standard error for each lag day
-  l_se <- sqrt(diag(variance))
-  # calculate lower and upper bound
-  l_lower95 <- estimate+(l_se*qnorm(1-0.975))
-  l_upper95 <- estimate+(l_se*qnorm(0.975))
-  l_type <- as.character(rep("lag", times = length(estimate)))
+  smk_estimate <- exp_b %*% smk_parms
+  nosmk_estimate <- exp_b %*% nosmk_parms
   
+  # time variable
+  time <- ((rep(1:length(smk_estimate))-1))
+  
+  # covariance matrix for knots 
+  # output smoke basis matrix and nosmoke basis matrix
+  smk_cov_mat <- as.matrix(vcov(mod))[smk_names, smk_names]
+  nosmk_cov_mat <- as.matrix(vcov(mod))[nosmk_names, nosmk_names]
+  # estimate variance of spline
+  smk_var <- exp_b %*% smk_cov_mat %*% t(exp_b)
+  nosmk_var <- exp_b %*% nosmk_cov_mat %*% t(exp_b)
+  
+  # estimate lag ----
+  # estimate standard error for each lag day for smoke
+  l_smk_se <- sqrt(diag(smk_var))
+  # calculate lower and upper bound for smoke
+  l_smk_l95 <- smk_estimate+(l_smk_se*qnorm(1-0.975))
+  l_smk_u95 <- smk_estimate+(l_smk_se*qnorm(0.975))
+  
+  # estimate standard error for each lag dat for nosmoke
+  l_nosmk_se <- sqrt(diag(nosmk_var))
+  # calculate lower and upper bound for smoke
+  l_nosmk_l95 <- nosmk_estimate+(l_nosmk_se*qnorm(1-0.975))
+  l_nosmk_u95 <- nosmk_estimate+(l_nosmk_se*qnorm(0.975))
+  
+  # list lag type of estimate
+  l_type <- as.character(rep("lag", times = length(smk_estimate)*2))
+  # smoke strata
+  smk_strata <- as.character(c(rep("Yes", times = length(smk_estimate)),
+                              rep("No", times=length(smk_estimate))))
+
   # l_estimate
-  l_estimate <- data.frame(exposure, outcome, l_type, time, exp(estimate), 
-                           exp(l_lower95), exp(l_upper95), row.names = NULL) 
+  l_estimate <- data.frame(exposure, outcome, l_type, smk_strata, time, 
+                           exp(c(smk_estimate, nosmk_estimate)), 
+                           exp(c(l_smk_l95, l_nosmk_l95)), 
+                           exp(c(l_smk_u95, l_nosmk_u95)), 
+                               row.names = NULL) 
   # assign column names
-  colnames(l_estimate) <- c("exposure", "outcome", "type","time", "estimate",
-                            "lower95","upper95") 
+  colnames(l_estimate) <- c("exposure", "outcome", "type", "smoke", "time", 
+                            "estimate", "lower95","upper95") 
+  
   # estimate cumulative ----
-  c_type <- as.character(rep("cumulative", times = length(estimate)))
-  # sequential cumulative estimate
-  cumulative_estimate <- sapply(seq_along(estimate), function(x){
-    sum(estimate[1:x])
+  c_type <- as.character(rep("cumulative", times = length(smk_estimate)*2))
+  # sequential cumulative estimate for smoke
+  c_smk_est <- sapply(seq_along(smk_estimate), function(x){
+    sum(smk_estimate[1:x])
   })
-  # stderr cumulative effect
-  cumulative_se <- sapply(seq_along(estimate), function(y){
-    sqrt(sum(variance[1:y,1:y]))
+  # stderr cumulative effect for smoke
+  c_smk_se <- sapply(seq_along(smk_estimate), function(y){
+    sqrt(sum(smk_var[1:y,1:y]))
   })
-  # cumulative 95CI
-  c_lower95 <- cumulative_estimate+(cumulative_se*qnorm(1-0.975))
-  c_upper95 <- cumulative_estimate+(cumulative_se*qnorm(0.975))
-  # return dataframe
-  c_estimate <- data.frame(exposure, outcome, c_type, time, 
-                           exp(cumulative_estimate), exp(c_lower95), 
-                           exp(c_upper95), row.names = NULL)
+  
+  # sequential cumulative estimate for nosmoke
+  c_nosmk_est <- sapply(seq_along(nosmk_estimate), function(x){
+    sum(nosmk_estimate[1:x])
+  })
+  # stderr cumulative effect for smoke
+  c_nosmk_se <- sapply(seq_along(nosmk_estimate), function(y){
+    sqrt(sum(nosmk_var[1:y,1:y]))
+  })
+
+  # cumulative 95CI for smoke
+  c_smk_l95 <- c_smk_est+(c_smk_se*qnorm(1-0.975))
+  c_smk_u95 <- c_smk_est+(c_smk_se*qnorm(0.975))
+  # cumulative 96CI for no smoke
+  c_nosmk_l95 <- c_nosmk_est+(c_nosmk_se*qnorm(1-0.975))
+  c_nosmk_u95 <- c_nosmk_est+(c_nosmk_se*qnorm(0.975))
+  
+  # list lag type of estimate
+  c_type <- as.character(rep("cumulative", times = length(smk_estimate)*2))
+  
+  # c_estimate
+  c_estimate <- data.frame(exposure, outcome, c_type, smk_strata, time, 
+                           exp(c(c_smk_est, c_nosmk_est)), 
+                           exp(c(c_smk_l95, c_nosmk_l95)), 
+                           exp(c(c_smk_u95, c_nosmk_u95)), 
+                           row.names = NULL) 
   # assign column names
-  colnames(c_estimate) <- c("exposure", "outcome", "type","time","estimate",
-                            "lower95","upper95") 
+  colnames(c_estimate) <- c("exposure", "outcome", "type", "smoke", "time", 
+                            "estimate", "lower95","upper95") 
+
   # bind lag and cumulative estimates together
   return_estimate <- rbind(c_estimate, l_estimate)
   # print check
