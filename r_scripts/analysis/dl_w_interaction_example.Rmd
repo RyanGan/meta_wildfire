@@ -1,23 +1,36 @@
 ---
-title: "Distributed Lag with Interaction"
+title: "Distributed Lag with Interaction Example"
 author: "Ryan Gan"
 date: "3/7/2018"
 output: html_document
 ---
 
-Code to be broken up.
-```{r setup, include=FALSE}
+## Introduction
 
+I'm going to test out the code for interaction using distributed lag Ander provided using a subset of data to make sure the code works. I will need the lme4 mixed effects model package and the spline package. Loading tidyverse for  data wrangling.
+
+```{r setup, include=FALSE}
+# knitr options
+knitr::opts_chunk$set(fig.height = 6, fig.width = 8, fig.align = "center",
+                      results = "asis")
 
 # libraries ----
 library(tidyverse)
 library(lme4) # loading lme4 mixed model package
 library(splines)
-library(parallel)
+```
 
+Reading in time series (outcome and PM~2.5~) and limiting to Washington state. I will probably test out the model a a couple counties first before running a random effects model as they can take a bit of time to converge.
+
+I've created a new binary smoke indicator that uses the difference in the kriged PM~2.5~ estimate and seasonal background PM~2.5~ estimate and HMS proportion of county with smoke in the column. My definition of smoke I'll use is difference > 10 ug m^-3^ and HMS proportion for a county > 0.10 for a given day. Furthermore, I've restricted the dates this can occur to be March to November.
+
+```{r read_data}
 # read in time series ----
-ts <- read_csv("./data/health/1015-morbidity_pm_ts.csv") %>% 
+ts <- read_csv("../../data/health/1015-morbidity_pm_ts.csv") %>% 
+  # filter to washington
+  filter(state == "Washington") %>% 
   filter(!is.na(pm_krig)) %>% 
+  rename(pm_diff = pm_smk) %>% 
   mutate(day = as.factor(weekdays(date)),
          weekend = ifelse(day %in% c("Saturday", "Sunday"), 1, 0),
          month = as.factor(lubridate::month(date)),
@@ -26,30 +39,30 @@ ts <- read_csv("./data/health/1015-morbidity_pm_ts.csv") %>%
                                       month %in% c(3:5) ~ "spring",
                                       month %in% c(6:8) ~ "summer",
                                       month %in% c(9:11)~ "fall")),
-         smoke10_hms = if_else(smoke10 == 1 & hms > 0.1, 1, 0),
-         smoke15_hms = if_else(smoke15 == 1 & hms > 0.1, 1, 0))
+         smoke10_hms = if_else(pm_diff > 10 & month %in% c(3:11) & hms > 0.1,
+                               1, 0),
+         smoke15_hms = if_else(pm_diff > 15 & month %in% c(3:11) & hms > 0.1,
+                               1, 0))
 
-# same-day association of binary smoke variables, accounting for county, poulation
-# month, year, state, weekend
 # vector of names of outcomes to regress
-
 outcomes <- c("resp", "asthma", "copd", "acute_bronch", "pneum", "cvd", 
               "arrhythmia", "cereb_vas", "hf", "ihd", "mi", "cardiopulm_n")
+```
 
+Reading in PM~2.5~ data. I'm creating lagged continous PM~2.5~ and binary smoke variables dataframes and then joining it back with the Washington time serieis data. Starting by creating lagged data.
 
-exposure <- c("smoke10", "smoke15", "smoke_wave")
-# expand grid so each outcome/exposure combo is modeled 
-exp_out_combo <- expand.grid(exposure, outcomes) %>% arrange(Var1)
-
+Creating lagged variables for smoke variable.
+```{r read_pm}
 # read county pm timeseries
-county_pm_ts <- read_csv("./data/smoke/1015-county_popwt_pm.csv")
+county_pm_ts <- read_csv("../../data/smoke/1015-county_popwt_pm.csv")
 
 # binary smoke lagged dataframe
 smoke_lag <- county_pm_ts %>% 
-  filter(str_sub(fips,start=1,end=2) %in% c("08", "53")) %>% 
-  select(fips, date, hms, smoke10, smoke15, smoke_wave) %>% 
-  mutate(smoke10_hms = if_else(smoke10 == 1 & hms > 0.1, 1, 0),
-         smoke15_hms = if_else(smoke15 == 1 & hms > 0.1, 1, 0)) %>% 
+  filter(str_sub(fips,start=1,end=2) %in% c("53")) %>% 
+  rename(pm_diff = pm_smk) %>% 
+  select(fips, date, pm_diff, hms, month) %>% 
+  mutate(smoke10_hms = if_else(pm_diff > 10 & month %in% c(3:11) & hms > 0.1,
+                               1, 0)) %>% 
   arrange(fips, date) %>% 
   group_by(fips) %>% 
   mutate(smoke10_hms_lag1 = lag(smoke10_hms, 1, order_by = fips),
@@ -57,22 +70,13 @@ smoke_lag <- county_pm_ts %>%
          smoke10_hms_lag3 = lag(smoke10_hms, 3, order_by = fips),
          smoke10_hms_lag4 = lag(smoke10_hms, 4, order_by = fips),         
          smoke10_hms_lag5 = lag(smoke10_hms, 5, order_by = fips),
-         smoke10_hms_lag6 = lag(smoke10_hms, 6, order_by = fips),
-         # smoke 15
-         smoke15_hms_lag1 = lag(smoke15_hms, 1, order_by = fips),
-         smoke15_hms_lag2 = lag(smoke15_hms, 2, order_by = fips),
-         smoke15_hms_lag3 = lag(smoke15_hms, 3, order_by = fips),
-         smoke15_hms_lag4 = lag(smoke15_hms, 4, order_by = fips),         
-         smoke15_hms_lag5 = lag(smoke15_hms, 5, order_by = fips),
-         smoke15_hms_lag6 = lag(smoke15_hms, 6, order_by = fips),
-         # smoke wave
-         smoke_wave_lag1 = lag(smoke_wave, 1, order_by = fips),
-         smoke_wave_lag2 = lag(smoke_wave, 2, order_by = fips),
-         smoke_wave_lag3 = lag(smoke_wave, 3, order_by = fips),
-         smoke_wave_lag4 = lag(smoke_wave, 4, order_by = fips),         
-         smoke_wave_lag5 = lag(smoke_wave, 5, order_by = fips),
-         smoke_wave_lag6 = lag(smoke_wave, 6, order_by = fips))
+         smoke10_hms_lag6 = lag(smoke10_hms, 6, order_by = fips)) %>% 
+  select(-c(pm_diff, hms, month))
+```
 
+Creating lagged variables for PM~2.5~ variable.
+```{r lag_pm}
+# continous pm lagged dataframe
 pm_lag <- county_pm_ts %>% 
   filter(str_sub(fips,start=1,end=2) %in% c("08", "53")) %>% 
   select(fips, date, pm_krig) %>% 
@@ -84,36 +88,119 @@ pm_lag <- county_pm_ts %>%
          pm_lag4 = lag(pm_krig, 4, order_by = fips),         
          pm_lag5 = lag(pm_krig, 5, order_by = fips),
          pm_lag6 = lag(pm_krig, 6, order_by = fips))
+```
 
-
+Joining both lagged variables with time series.
+```{r join_with_ts}
 # join with morbidity data
 ts_lag <- ts %>%
-  filter(fips == "53007") %>% 
-  select(-c(pm_krig, smoke10, smoke15, smoke10_hms, smoke15_hms, 
-            hms, smoke_wave)) %>% 
+  select(-c(pm_krig, smoke10_hms, smoke_wave)) %>% 
   left_join(smoke_lag, by = c("fips", "date")) %>% 
   left_join(pm_lag, by = c("fips", "date")) %>% 
-  filter(complete.cases(.)) %>% 
+  filter(!is.na(pm_lag6)) %>% 
   arrange(fips, date) %>% 
   mutate(hms_percent = hms *100)
+```
 
-# test interaction -------------------------------------------------------------
-pm_matrix <- as.matrix(select(ts_lag, pm_krig, contains("pm_lag")))/10
-smoke_matrix <- as.matrix(select(ts_lag, contains("smoke10_hms")))
+### Spokane County
 
-# note this code differs slightly from what Ander provided as I couldn't quite
-# get it to work based on code, but this shoudl do what he suggested
+Before I evaluate Washington and Colorado, I'm going to start with Spokane county in Washington as a test county to understand the data at one level. Chelan is a good example of a county that was heavily impacted by smoke.
 
-time_spl <- ns(ts_lag$date, df = 24)
+```{r chelan_ts}
+spokane_ts <- ts_lag %>% 
+  filter(fips == "53063")
+```
 
-ts_lag$pm_pred <- predict(lm(pm_krig ~ time_spl, data=ts_lag), type="response")
+Plot of the PM~2.5~ time series with percent of HMS plotted (blue dots) with it. Note that the units are different, but this is a quick plot to see how PM and HMS smoke relate. I've also plotted the seasonal median with smoke isn't present as a purple line.
 
-ggplot(ts_lag, aes(x=date,y=pm_krig)) +
+```{r pm_plot}
+plot <- ggplot(spokane_ts, aes(x=date, y=pm_krig)) +
   geom_point() +
   geom_point(aes(x=date, y=hms_percent), color = "blue") +
-  geom_line(aes(x=date, y=pm_pred), color="red")
+  geom_line(aes(x=date, y=bg_pm), color = "purple") +
+  theme_minimal()
 
+print(plot)
+```
 
+Plotting respiratory hospitalizations in Chelan over the time series. It's not super informative since it's a sparsely populated county.
+
+```{r outcome_plot}
+plot <- ggplot(spokane_ts, aes(x=date, y=resp)) +
+  geom_point() +
+  theme_minimal()
+
+print(plot)
+```
+
+#### Time Spline
+I want to fit a spline on this time-series that predicts the seasonal trends in PM~2.5~ pretty well. This is a method to control for possible unmeasured confounding that predicts the PM~2.5~ series and outcome series. 
+
+```{r time_spl}
+# spline
+time_spl <- ns(spokane_ts$date, df=24)
+# predicted pm based on spline
+pred_pm <- predict(lm(pm_krig ~ time_spl, data=spokane_ts), type = "response")
+
+# plot spline to see how well it fits
+plot <- ggplot(spokane_ts, aes(x=date, y=pm_krig)) +
+  geom_point() +
+  geom_point(aes(x=date, y=hms_percent), color = "blue") +
+  geom_line(aes(x=date, y=pred_pm), color = "red") +
+  theme_minimal()
+
+print(plot)
+```
+
+### Distributed Lag with Interaction
+
+Output the PM~2.5~ and binary smoke matrix. I'm also transforming the PM~2.5~ variable by dividing by 10 ug/ m^-3^ for interpretation reasons.
+
+```{r lagged_matrices}
+pm_matrix <- as.matrix(select(spokane_ts, pm_krig, contains("pm_lag")))/10
+smoke_matrix <- as.matrix(select(spokane_ts, contains("smoke10_hms")))
+```
+
+Ander provided some code examples, but I couldn't quite get it to work. I forgot to mention that the lagged matrix in the example code I gave him was a binary lagged matrix. However, I think I know what he wants, so I'm going to show example code here on a small example matrix to see if it's what he was thinking.
+
+Taking the first 3 rows and columns of the PM matrix.
+```{r test_pm_mat}
+# oupt first 3 row and columns of pm matrix
+test_mat <- pm_matrix[1:3, 1:3]
+test_mat
+```
+
+Creating example smoke exposure matrix.
+```{r test_smk_mat}
+smk_mat <- matrix(c(1,0,1,0,1,0,1,0,1), nrow = 3)
+smk_mat
+```
+
+Creating example of no smoke exposure matrix.
+```{r test_nosmk_mat}
+nosmk_mat <- ifelse(smk_mat == 1, 0, 1)
+nosmk_mat
+```
+
+Estimate the PM on smoke days.
+```{r test_pmsmk_mat}
+pmsmk <- test_mat * smk_mat
+pmsmk
+```
+
+Estimate the PM on non-smoke days.
+```{r test_pmnosmk_mat}
+pmnosmk <- test_mat * nosmk_mat
+pmnosmk
+```
+
+This looks like it worked, but I will check with Ander to make sure this is what he was trying to do.
+
+#### Define Lagged Knots
+
+Define a 3 degree of freedom spline for shape of exposure/outcome lagged response and create the PM and binary smoke basis. I then want to create a PM basis that is 0 for smoke days and 1 on non-smoke days to capture non-smoke PM~2.5~ lagged relationship, and then a matrix that is 1 on smoke days and 0 on non-smoke days to capture the PM~2.5~ lagged relationship on smoke days.
+
+```{r define_basis}
 # define basis b using natural spline function
 exp_b <- ns(0:(ncol(pm_matrix)-1), df = 3, intercept = T)
 # multiply lagged pm matrix by basis
@@ -123,14 +210,20 @@ smk_basis <- smoke_matrix %*% exp_b
 pm_basis_smk <- pm_basis * smk_basis
 # basis for pm without smoke
 pm_basis_nosmk <- pm_basis * ifelse(smk_basis == 1, 0, 1)
+```
 
+Running a simple Quasi-Poisson regression model on respiratory outcomes. For reference, the dispersion parameter is 1.04 for this model, which I think is not bad. It would suggest that a Poisson might work modestly well when I plug it in to a random effects model (which does not have the Quasi-Poisson option).
+
+```{r simple_poisson_mod}
 # simple model trying out ander's interaction code
-mod <- glm(asthma ~ pm_basis_smk + pm_basis_nosmk + time_spl,
-           data = ts_lag, 
-           family = "poisson"(link="log"))
+mod <- glm(resp ~ pm_basis_smk + pm_basis_nosmk + time_spl + weekend +
+  offset(log(population)), data = spokane_ts, 
+  family = "quasipoisson"(link="log"))
+```
 
-summary(mod)
+Now I want to extract the parameters for the smoke and no smoke PM~2.5~ values from the model. I've extracted the variable names too to help with covariance matrix.
 
+```{r param_est}
 # calculate estimates ----
 # output pm basis parameters
 smk_parms <- broom::tidy(mod) %>% 
@@ -152,26 +245,18 @@ nosmk_names <- broom::tidy(mod) %>%
   filter(stringr::str_detect(term, "_nosmk")) %>% 
   select(term) %>% 
   as_vector()
+```
 
+Estimate association estimates by multiplying the smoke and non-smoke parameters by the exposure basis (exp_b). This is equivalent to the lagged day association. For this example, I'm only going to present the cumulative.
+
+```{r association}
 # estimate distributed lag values for each day
 smk_estimate <- exp_b %*% smk_parms
 nosmk_estimate <- exp_b %*% nosmk_parms
+```
 
-# time variable
-time <- ((rep(1:length(smk_estimate))-1))
-# covariance matrix for knots 
-smk_cov_matrix <- as.matrix(vcov(mod))[smk_names, smk_names]
-nosmk_cov_matrix <- as.matrix(vcov(mod))[nosmk_names, nosmk_names]
-# estimate variance of spline
-smk_variance <- exp_b %*% smk_cov_matrix %*% t(exp_b)
-nosmk_variance <- exp_b %*% nosmk_cov_matrix %*% t(exp_b)
-
-# estimate cumulative ----
-c_type <- as.character(rep("cumulative", times = length(smk_estimate)*2))
-# smoke strata
-smk_strata <- as.character(c(rep("Yes", times = length(smk_estimate)),
-  rep("No", times=length(smk_estimate))))
-
+Estimating cumulative effect estimate.
+```{r cumulative_est}
 # sequential cumulative estimate
 # smoke cumulative estimates
 smk_c_est <- sapply(seq_along(smk_estimate), function(x){
@@ -181,8 +266,19 @@ smk_c_est <- sapply(seq_along(smk_estimate), function(x){
 nosmk_c_est <- sapply(seq_along(nosmk_estimate), function(x){
   sum(nosmk_estimate[1:x])
 })
+```
 
-cbind(smk_c_est, nosmk_c_est)
+Now I need to extract the variance for each smoke and nonsmoke basis to estimate the variance for each day and then estimating the cumulative standard error for each day.
+
+```{r std_err}
+# time variable
+time <- ((rep(1:length(smk_estimate))-1))
+# covariance matrix for knots 
+smk_cov_matrix <- as.matrix(vcov(mod))[smk_names, smk_names]
+nosmk_cov_matrix <- as.matrix(vcov(mod))[nosmk_names, nosmk_names]
+# estimate variance of spline
+smk_variance <- exp_b %*% smk_cov_matrix %*% t(exp_b)
+nosmk_variance <- exp_b %*% nosmk_cov_matrix %*% t(exp_b)
 # stderr cumulative effect smk
 smk_c_se <- sapply(seq_along(smk_c_est), function(y){
   sqrt(sum(smk_variance[1:y,1:y]))
@@ -191,6 +287,17 @@ smk_c_se <- sapply(seq_along(smk_c_est), function(y){
 nosmk_c_se <- sapply(seq_along(nosmk_c_est), function(y){
   sqrt(sum(nosmk_variance[1:y,1:y]))
 })
+```
+
+Now that I have the cumulative effect and standard error for PM~2.5~ smoke and non-smoke, I'm going to take these estimates and wrangle them in to a dataframe for plotting.
+
+```{r c_est_wrangle}
+# estimate cumulative ----
+outcome <- "resp"
+c_type <- as.character(rep("cumulative", times = length(smk_estimate)*2))
+# smoke strata
+smk_strata <- as.character(c(rep("Yes", times = length(smk_estimate)),
+  rep("No", times=length(smk_estimate))))
 
 # cumulative 95CI
 c_smk_l95 <- smk_c_est+(smk_c_se*qnorm(1-0.975))
@@ -206,7 +313,37 @@ c_estimate <- data.frame(outcome, c_type, smk_strata, time,
 # assign column names
 colnames(c_estimate) <- c("outcome", "type", "smoke", "time","estimate",
                           "lower95","upper95") 
-
-
-# end test interaction ---------------------------------------------------------
 ```
+
+I was just thinking that this code is long, and I could probably itterate it for smoke and nonsmoke days, but I'll work on that when I extend this method to the full dataset.
+
+Plotting the cumulative effect between PM~2.5~ over 0 to 6 days prior to the outcome event for smoke and non-smoke.
+
+```{r dl_plot}
+plot <- ggplot(c_estimate, aes(x=time, y=estimate)) +
+  geom_line(colour = "blue", size = 1) +
+  geom_ribbon(aes(ymin = lower95, ymax = upper95), 
+              fill = "blue", alpha = 0.3) + 
+  scale_x_continuous(breaks = c(seq(0,7, by=1))) +
+  geom_hline(yintercept = 1, linetype = 2, colour = "red") +
+  facet_wrap(~smoke) +
+  ylab(expression("RR: 10 ug/m^3 increase smoke PM"[2.5])) +
+  xlab("Lagged Days") +
+  ggtitle("Spokane Respiratory Hospitalizations Cumulative") +
+  theme(panel.grid.major.x = element_blank(),
+        panel.grid.major.y = element_line(linetype = "dotted"),
+        panel.grid.minor = element_blank()) +
+  theme_minimal()
+
+print(plot)
+```
+
+I wouldn't read much in to this one county, since it's realtively un-populated
+
+## Questions for Ander
+
+- Is it possible to test the difference in the magnitude of effect on a given day between a smoke day and a non-smoke day. For example, is the effect of PM~2.5~ on the same day as the outcome count different depending on if smoke is present vs. not present? Looking at the plot, I would say yes!
+
+- GLMER mixed model has no Quasi-Poisson distribution, which could inflat the variance, which I believe would result in wider confidence intervals. What are some approaches to check for this, and if this is the case, account for it? Bayesian methods? Another question would be if it's worth the effort, based on your experience.
+
+
