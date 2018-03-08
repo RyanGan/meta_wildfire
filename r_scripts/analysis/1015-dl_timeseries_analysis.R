@@ -75,7 +75,7 @@ outcomes <- c("resp", "asthma", "copd", "acute_bronch", "pneum", "cvd",
 
 exposure <- c("smoke10_hms", "smoke15_hms")
 # expand grid so each outcome/exposure combo is modeled 
-exp_out_combo <- expand.grid(binary_smoke, outcomes) %>% arrange(Var1)
+exp_out_combo <- expand.grid(exposure, outcomes) %>% arrange(Var1)
 
 # define time spline to adjust for
 time_spl <- ns(ts_lag$date, df=24)
