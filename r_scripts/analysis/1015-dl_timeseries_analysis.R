@@ -112,7 +112,7 @@ smoke_dl_results <- parApply(cl, exp_out_combo, 1, function(x){
   smk_mat <- as.matrix(select(ts_lag, contains(exposure)))
 
   # define basis b using natural spline function
-  exp_b <- ns(0:(ncol(smk_mat)-1), df = 4, intercept = T)
+  exp_b <- ns(0:(ncol(smk_mat)-1), df = 3, intercept = T)
   # multiply lagged pm matrix by basis
   pm_basis <- pm_mat %*% exp_b
   smk_basis <- smk_mat %*% exp_b
@@ -123,8 +123,7 @@ smoke_dl_results <- parApply(cl, exp_out_combo, 1, function(x){
   
   # fit mixed model
   mod <- glmer(as.formula(paste0(outcome,"~pm_smk_basis + pm_nosmk_basis +",
-                        "time_spl + as.factor(weekend) + state + (1|fips) + ",
-                        "offset(log(population))")),
+                        "(1|fips) + offset(log(population))")),
                family = "poisson"(link="log"), data = ts_lag,
                control = glmerControl(optimizer = "bobyqa"))
   # test mod
@@ -258,7 +257,7 @@ print(head(smoke_dl_results))
 warnings()
 
 # write file ----
-write_csv(smoke_dl_results, "./data/health/1015-ts_smoke_dl_results.csv")
+write_csv(smoke_dl_results, "./data/health/1015-ts_dl_int_unadj_results.csv")
 
 # stop time
 stop <- Sys.time()
