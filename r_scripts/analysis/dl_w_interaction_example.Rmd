@@ -104,9 +104,9 @@ ts_lag <- ts %>%
 
 ### Spokane County
 
-Before I evaluate Washington and Colorado, I'm going to start with Spokane county in Washington as a test county to understand the data at one level. Chelan is a good example of a county that was heavily impacted by smoke.
+Before I evaluate Washington and Colorado, I'm going to start with Spokane county in Washington as a test county to understand the data at one level. Spokane is a good example of a county that was heavily impacted by smoke.
 
-```{r chelan_ts}
+```{r spokane_ts}
 spokane_ts <- ts_lag %>% 
   filter(fips == "53063")
 ```
@@ -167,31 +167,33 @@ Taking the first 3 rows and columns of the PM matrix.
 ```{r test_pm_mat}
 # oupt first 3 row and columns of pm matrix
 test_mat <- pm_matrix[1:3, 1:3]
-test_mat
+knitr::kable(test_mat)
 ```
 
 Creating example smoke exposure matrix.
 ```{r test_smk_mat}
 smk_mat <- matrix(c(1,0,1,0,1,0,1,0,1), nrow = 3)
-smk_mat
+colnames(smk_mat) <- c("smk", "smklag1", "smklag2")
+knitr::kable(smk_mat)
 ```
 
 Creating example of no smoke exposure matrix.
 ```{r test_nosmk_mat}
 nosmk_mat <- ifelse(smk_mat == 1, 0, 1)
-nosmk_mat
+colnames(nosmk_mat) <- c("nosmk", "nosmklag1", "nosmklag2")
+knitr::kable(nosmk_mat)
 ```
 
 Estimate the PM on smoke days.
 ```{r test_pmsmk_mat}
 pmsmk <- test_mat * smk_mat
-pmsmk
+knitr::kable(pmsmk)
 ```
 
 Estimate the PM on non-smoke days.
 ```{r test_pmnosmk_mat}
 pmnosmk <- test_mat * nosmk_mat
-pmnosmk
+knitr::kable(pmnosmk)
 ```
 
 This looks like it worked, but I will check with Ander to make sure this is what he was trying to do.
@@ -216,9 +218,9 @@ Running a simple Quasi-Poisson regression model on respiratory outcomes. For ref
 
 ```{r simple_poisson_mod}
 # simple model trying out ander's interaction code
-mod <- glm(resp ~ pm_basis_smk + pm_basis_nosmk + time_spl + weekend +
-  offset(log(population)), data = spokane_ts, 
-  family = "quasipoisson"(link="log"))
+mod <- glm(resp ~ pm_basis_smk + pm_basis_nosmk + smk_basis + 
+             time_spl + weekend + offset(log(population)), 
+           data = spokane_ts, family = "quasipoisson"(link="log"))
 ```
 
 Now I want to extract the parameters for the smoke and no smoke PM~2.5~ values from the model. I've extracted the variable names too to help with covariance matrix.
@@ -327,6 +329,7 @@ plot <- ggplot(c_estimate, aes(x=time, y=estimate)) +
   scale_x_continuous(breaks = c(seq(0,7, by=1))) +
   geom_hline(yintercept = 1, linetype = 2, colour = "red") +
   facet_wrap(~smoke) +
+  ylim(0.85, 1.2) +
   ylab(expression("RR: 10 ug/m^3 increase smoke PM"[2.5])) +
   xlab("Lagged Days") +
   ggtitle("Spokane Respiratory Hospitalizations Cumulative") +
@@ -339,6 +342,38 @@ print(plot)
 ```
 
 I wouldn't read much in to this one county, since it's realtively un-populated
+
+## Same-Day Interaction
+I'm running this model to see if the lagged day 0 estimates are in the ball park of these distributed lag models.
+
+```{r same_day_interaction}
+spokane_ts2 <- spokane_ts %>% 
+  mutate(pm_krig = pm_krig/10)
+
+mod2 <- glm(resp ~ pm_krig + smoke10_hms + pm_krig:smoke10_hms +
+           time_spl + weekend + offset(log(population)), 
+           data = spokane_ts2, family = "quasipoisson"(link="log"))
+
+# no smoke
+tidy_mod2 <- broom::tidy(mod2) %>% 
+  filter(term %in% c("pm_krig", "smoke10_hms", "pm_krig:smoke10_hms"))
+# print tidy_mod values; excluded additional spline covariates for ease of reading
+knitr::kable(tidy_mod2)
+```
+
+Rate ratio for a 10 ug m^-3^ increase in  PM~2.5~ on a no-smoke day.
+```{r rr_nosmk}
+rr_nosmk <- exp(tidy_mod2[1,2])
+rr_nosmk
+```
+
+Rate ratio for a 10 ug m^-3^ increase in  PM~2.5~ on a smoke day.
+```{r rr_smk}
+rr_smk <- exp(tidy_mod2[1,2] + tidy_mod2[3,2])
+rr_smk
+```
+
+I think the estimates for increasing PM~2.5~ on smoke and no smoke days from the standard interaction model are similar to the same day association in the distributed lag models.
 
 ## Questions for Ander
 

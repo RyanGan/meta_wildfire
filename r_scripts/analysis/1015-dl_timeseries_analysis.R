@@ -78,7 +78,7 @@ exposure <- c("smoke10_hms", "smoke15_hms")
 exp_out_combo <- expand.grid(exposure, outcomes) %>% arrange(Var1)
 
 # define time spline to adjust for
-time_spl <- ns(ts_lag$date, df=24)
+time_spl <- ns(ts_lag$date, df=12)
 
 # parallel distributed lag computing ----
 # set up cluster of 8 cores to parallelize models
@@ -123,8 +123,8 @@ smoke_dl_results <- parApply(cl, exp_out_combo, 1, function(x){
   
   # fit mixed model
   mod <- glmer(as.formula(paste0(outcome,"~pm_smk_basis + pm_nosmk_basis +",
-    "as.factor(weekend) + temp_f + as.factor(month) + as.factor(year) +", 
-    "(1|fips) + offset(log(population))")),
+    "as.factor(weekend) + temp_f + as.factor(state) + time_spl +", 
+    "offset(log(population)) + (1|fips)")),
                family = "poisson"(link="log"), data = ts_lag,
                control = glmerControl(optimizer = "bobyqa"))
   # test mod
@@ -258,7 +258,7 @@ print(head(smoke_dl_results))
 warnings()
 
 # write file ----
-write_csv(smoke_dl_results, "./data/health/1015-ts_dl_int_adj_tmw_results.csv")
+write_csv(smoke_dl_results, "./data/health/1015-ts_dl_int_tspl_adj_results.csv")
 
 # stop time
 stop <- Sys.time()
