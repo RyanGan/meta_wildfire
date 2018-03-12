@@ -210,13 +210,28 @@ casecross_ts <- function(data, date, ref_period = "month"){
 system.time(asthma_timestrat <- asthma %>% 
   mutate_all(as.character) %>% 
   casecross_ts(data = ., date = "date", ref_period = "month") %>% 
-  mutate(date = as.Date(date)))
+  mutate(date = as.Date(date)) %>% 
+ left_join(gwr_lag, by = c("fips", "date")))
 
 
 
 system.time(asthma_period <- time_stratified(data=asthma, id="id", 
   covariate = c("dx1", "age", "age_cat", "sex", "zip", "fips", "state"),
   admit_date = "date", start_date = "2015-06-01", end_date = "2015-09-30", 
-  interval = 7))
+  interval = 7) %>% 
+  mutate(date = as.Date(date)) %>% 
+  left_join(gwr_lag, by = c("fips", "date")))
 
 head(asthma_period)
+glimpse(asthma_period)
+glimpse(asthma_timestrat)
+
+asthma_period$outcome <- as.numeric(asthma_period$outcome)
+
+mod <- clogit(outcome ~ smoke10 + strata(identifier), data = asthma_period)
+summary(mod)
+
+asthma_timestrat$outcome <- as.numeric(asthma_timestrat$outcome)
+
+mod2 <- clogit(outcome ~ gwr_smk10*smoke10 + strata(id), data = asthma_timestrat)
+summary(mod2)
