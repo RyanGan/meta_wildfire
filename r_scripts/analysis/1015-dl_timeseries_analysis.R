@@ -123,8 +123,8 @@ smoke_dl_results <- parApply(cl, exp_out_combo, 1, function(x){
   
   # fit mixed model
   mod <- glmer(as.formula(paste0(outcome,"~pm_smk_basis + pm_nosmk_basis +",
-    "as.factor(weekend) + temp_f + as.factor(state) + time_spl +", 
-    "offset(log(population)) + (1|fips)")),
+      exposure, "+ as.factor(weekend) + temp_f + as.factor(state) + time_spl +", 
+      "offset(log(population)) + (1|fips)")),
                family = "poisson"(link="log"), data = ts_lag,
                control = glmerControl(optimizer = "bobyqa"))
   # test mod
@@ -258,7 +258,7 @@ print(head(smoke_dl_results))
 warnings()
 
 # write file ----
-write_csv(smoke_dl_results, "./data/health/1015-ts_dl_int_tspl_adj_results.csv")
+write_csv(smoke_dl_results, "./data/health/1015-ts_dl_int_tspl_adjsmk_results.csv")
 
 # stop time
 stop <- Sys.time()
