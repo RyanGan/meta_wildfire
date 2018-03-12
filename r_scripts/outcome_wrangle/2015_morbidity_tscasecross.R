@@ -155,65 +155,6 @@ glimpse(chars_2015_inpat)
 glimpse(co_ed)
 co_wa_ed_2015 <- bind_rows(co_ed, chars_2015_inpat)
 
-# test new casecross function -----
-# my casecrossover function is not exactly what I want since I need to define a period
-# testing out 
-
-# filter to just asthma
-asthma <- co_wa_ed_2015 %>% filter(dx1 %in% icd9_outcomes$asthma)
-
-test_obs <- slice(asthma, 1)
-
-month(test_obs$date)
-day(test_obs$date) %m+% 1
-wday(test_obs$date, label = T)
-
-date_seq <- seq.Date(floor_date(test_obs$date, unit = "month"),
-                ceiling_date(test_obs$date, unit = "month"), "days")
-
-wday(date_seq, label = T) == "Mon"
-
-# attempt at new function
-ts_casecross <- function(data, date, ref_period = "month"){
-  # convert dataframe to list
-  obs_list <- pmap(as.list(data), list)
-  
-  # next step to find a way to go through each element of list 
-  # tidy eval date variable to quote
-  event_date <- data$date
-  # day of week
-  day_week <- wday(event_date)
-  # create sequence of dates based on ref period
-  date_seq <- seq.Date(floor_date(event_date, unit = ref_period), 
-                       ceiling_date(event_date, unit = ref_period), "days")
-  date_seq
-  # find dates on the same day of event date
-  ref_dates <- date_seq[wday(date_seq)==day_week]
-  # repeat observations with new dates
-  df <- data %>% slice(rep(1:n(), each = length(ref_dates))) %>% 
-    mutate(date = ref_dates, 
-    outcome = as.factor(if_else(date == event_date, 1, 0)))
-}
-
-test <- ts_casecross(test_obs, date = "date", ref_period = "month")
-
-test_obs2 <- slice(asthma, 1:2)
-
-test_obs2
-
-test2 <- test_obs2 %>% 
-  map_dfr(., ~ts_casecross(., date="date", ref_period = "month"))
-
-# defining a lag function
-lags <- function(var, n=10){
-  var <- enquo(var)
-  
-  indices <- seq_len(n)
-  map( indices, ~quo(lag(!!var, !!.x)) ) %>% 
-    set_names(sprintf("%s_lag%d", rlang::quo_text(var), indices))
-  
-}
-
 # time-stratified case-crossover ----
 start_time <- Sys.time()
 ts_casecross_list <- icd9_outcomes %>% 
@@ -238,3 +179,44 @@ time
 # saving casecross over list as Rdata
 save(ts_casecross_list, file = paste0("./data/health/",
   "2015-morbidity_casecross_list.RData"))
+
+# time-stratified for each month  ----------------------------------------------
+# new casecross function
+# defining a new casecross over function to estimate within a month
+casecross_ts <- function(data, date, ref_period = "month"){
+  # convert dataframe to list
+  obs_list <- pmap(data, list)
+  # map over list
+  map_dfr(obs_list, function(x){
+    # tidy eval date variable to quote
+    event_date <- as.Date(x[[date]])
+    # day of week
+    day_week <- wday(event_date)
+    # create sequence of dates based on ref period
+    date_seq <- seq.Date(floor_date(event_date, unit = ref_period), 
+                         ceiling_date(event_date, unit = ref_period), "days")
+    # find dates on the same day of event date
+    ref_dates <- date_seq[wday(date_seq)==day_week]
+    # repeat observations with new dates
+    df <- data.frame(x) %>% 
+      slice(rep(1:n(), each = length(ref_dates))) %>% 
+      mutate(date = ref_dates, 
+             outcome = as.factor(if_else(date == event_date, 1, 0))) %>% 
+      mutate_all(as.character)
+  }) # end inner map
+} # end function
+
+# asthma timestratified
+system.time(asthma_timestrat <- asthma %>% 
+  mutate_all(as.character) %>% 
+  casecross_ts(data = ., date = "date", ref_period = "month") %>% 
+  mutate(date = as.Date(date)))
+
+
+
+system.time(asthma_period <- time_stratified(data=asthma, id="id", 
+  covariate = c("dx1", "age", "age_cat", "sex", "zip", "fips", "state"),
+  admit_date = "date", start_date = "2015-06-01", end_date = "2015-09-30", 
+  interval = 7))
+
+head(asthma_period)
