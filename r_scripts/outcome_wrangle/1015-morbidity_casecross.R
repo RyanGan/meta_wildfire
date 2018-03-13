@@ -15,7 +15,7 @@ library(lubridate)
 library(case.crossover)
 
 # read ER hosp
-er_hosp <- read_csv("./data/health/er_hosp.csv")
+er_hosp <- read_csv("./data/health/1015-er_hosp.csv")
 
 # apply time stratified case-crossover function ----
 # time-stratified case-crossover ----

@@ -146,4 +146,4 @@ glimpse(or_hosp)
 er_hosp <- bind_rows(co_hosp, wa_hosp, or_hosp)
 
 # saving er_hosp 
-write_csv(er_hosp, "./data/health/er_hosp.csv")
+write_csv(er_hosp, "./data/health/1015-er_hosp.csv")
