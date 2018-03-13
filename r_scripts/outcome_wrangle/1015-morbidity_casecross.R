@@ -27,7 +27,10 @@ casecross_list <- icd9_outcomes %>%
                   "fips", "state"))) 
 stop_time <- Sys.time()
 time <- stop_time - start_time
-time
+print(time)
+
+# head casecross list
+head(casecross_list[1])
 
 # saving casecross over list as Rdata
 save(casecross_list, file = paste0("./data/health/",
