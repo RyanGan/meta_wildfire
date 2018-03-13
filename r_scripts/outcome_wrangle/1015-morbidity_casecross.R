@@ -11,6 +11,8 @@
 
 # library ----
 library(tidyverse)
+library(lubridate)
+library(case.crossover)
 
 # read ER hosp
 er_hosp <- read_csv("./data/health/er_hosp.csv")
