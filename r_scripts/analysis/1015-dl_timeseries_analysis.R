@@ -289,7 +289,7 @@ warnings()
 
 # write file ----
 write_csv(smoke_dl_results, paste0("./data/health/",
-  "1015-ts_dl_int_tspl_adjsmk_results.csv"))
+  "1015-ts_dl_int_results-2018-03-14.csv"))
 
 # stop time
 stop <- Sys.time()
