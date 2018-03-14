@@ -1,0 +1,510 @@
+---
+title: "Asthma Distributed Lag"
+author: "Ryan Gan"
+date: "2018-03-13"
+editor_options:
+  chunk_output_type: inline
+output:
+  html_document:
+    df_print: paged
+
+---
+
+```{r setup, include=F}
+library(tidyverse)
+library(survival)
+library(splines)
+library(lubridate)
+
+# knitr options
+knitr::opts_chunk$set(fig.width=8, fig.height=6, 
+                      warning=FALSE, message=FALSE, echo=F)
+```
+
+
+## Introduction
+
+Testing out distributed lag code on a case-crossover dataframe. Working with the case-crossover dataframe before scaling to other outcomes.
+
+Reading in PM~2.5~ data.
+
+```{r pm_data}
+pm <- read_csv("../../data/smoke/1015-county_popwt_pm.csv") %>% 
+  rename(pm_diff = pm_smk) %>% 
+  mutate(day = as.factor(weekdays(date)),
+         weekend = ifelse(day %in% c("Saturday", "Sunday"), 1, 0),
+         month = as.factor(lubridate::month(date)),
+         year = as.factor(lubridate::year(date)),
+         season = as.factor(case_when(month %in% c(12, 1, 2) ~ "winter",
+                                      month %in% c(3:5) ~ "spring",
+                                      month %in% c(6:8) ~ "summer",
+                                      month %in% c(9:11)~ "fall")),
+         smoke10_hms = if_else(pm_diff > 10 & month %in% c(3:11) & hms > 0.1,
+                               1, 0),
+         smoke15_hms = if_else(pm_diff > 15 & month %in% c(3:11) & hms > 0.1,
+                               1, 0)) %>% 
+  select(-state) 
+```
+
+Oregon data did not come with a county indicator, so we used ZIPCODEs provided to find the county. Loading key created by Jingyang and assigning 5 digit fips variable.
+
+```{r oregon_county_key}
+# oregon county key 
+oregon_county_key <- read_csv(paste0("../../data/census/",
+                                    "oregon_zip_county_key.csv"),
+                              col_types = cols(.default = "c")) 
+# create 5 digit fips key
+or_fips <- paste0("410", c(paste0("0",seq(1,9,2)), seq(11, 71, 2)))
+# county key sorted by name
+county <- sort(unique(oregon_county_key$county_name))
+county_fips <- data.frame(or_fips, county) %>% mutate_all(as.character)
+
+# combine zip and county, remove county name
+or_zip_county <- oregon_county_key %>% 
+  # bind fips value in
+  rename(county = county_name) %>% 
+  left_join(county_fips, by = "county") %>% 
+  select(1,3) %>% 
+  mutate_all(as.character)
+```
+
+Read in asthma data and join in Oregon fips.
+
+```{r read_asthma}
+asthma <- read_csv("../../data/health/1015-asthma_casecross", 
+                   col_types = cols(.default = "c")) %>% 
+  left_join(or_zip_county, by = "zip") %>% 
+  # fill in missing fips values
+  mutate(fips = if_else(is.na(fips), or_fips, fips)) %>% 
+  # remove or_fips variable
+  select(-or_fips) %>% 
+  # remove missing colorado counties (i think military base)
+  filter(!is.na(fips)) %>% 
+  # convert some values
+  mutate(outcome = as.numeric(outcome),
+         date = as.Date(date),
+         age = as.numeric(age),
+         stay_length = as.numeric(stay_length)) %>% 
+  left_join(pm, by = c("fips", "date")) %>% 
+  filter(!is.na(pm_krig))
+```
+
+### Unadjusted Associations
+
+Running conditional logistic regression models to account for within person design. Each observation has referent periods assigned within the same month as the event date. 
+
+#### Binary Smoke 10
+
+Regressing binary event yes or no on binary smoke where the difference between estimated PM~2.5~ and seasonal median is > 10 ug/m^3 and HMS cover for the county is > 10%. Running by state to see if there is any state-level differences. 
+
+```{r smoke10_state_association}
+states <- as.factor(sort(unique(asthma$state))) 
+state_strata <- sort(unique(asthma$state))
+  
+summary(as.factor(asthma$age_cat))
+
+results <- state_strata %>% 
+  map(~filter(asthma, state == .)) %>% 
+  map_dfr(~ broom::tidy(clogit(outcome ~ smoke10_hms + strata(id), 
+                          data = .))) %>% 
+  select(estimate, conf.low, conf.high) %>% 
+  mutate_all(exp) %>% 
+  round(.,3) %>% 
+  cbind(state_strata, .)
+
+knitr::kable(results, 
+  caption = "Odds ratio and 95% CI between Smoke10 and asthma for each state")
+```
+
+Looks like there is an association in Washington but no association in Colorado or Oregon. We've seen an association in Oregon when PM was assigned at the ZIPCODE level using the blended models that I believe were at a finer resolution. The outcome for Oregon is also slightly different where we had to match the inpatient hospitalizations admitted through the ER in Colorado and Washington. Oregon has no direct variable to do this, so Jingyang found observations by the same person that were within a day or two admitted first to the ER, then to inpatient.  
+
+#### Binary Smoke 15
+
+Running conditional logistic regression models for binary smoke where the difference between estimated PM~2.5~ and seasonal median is > 15 ug/m^3 and HMS cover for the county is > 10%. Running by state to see if there is any state-level differences. 
+
+```{r smoke15_state_association}
+results <- state_strata %>% 
+  map(~filter(asthma, state == .)) %>% 
+  map_dfr(~ broom::tidy(clogit(outcome ~ smoke15_hms + strata(id), 
+                          data = .))) %>% 
+  select(estimate, conf.low, conf.high) %>% 
+  mutate_all(exp) %>% 
+  round(.,3) %>% 
+  cbind(state_strata, .)
+
+knitr::kable(results, 
+  caption = "Odds ratio and 95% CI between Smoke15 and asthma for each state")
+```
+
+Association even stronger for Washington, but inverse associations for Colorado and Oregon. Could be real where people generally tried to avoid high PM days with visible smoke.
+
+#### Continous PM
+
+Evaluating continous PM~2.5~. 
+
+```{r pm_state_association}
+results <- state_strata %>% 
+  map(~filter(asthma, state == .)) %>% 
+  map_dfr(~ broom::tidy(clogit(outcome ~ pm_krig + strata(id), 
+                          data = .))) %>% 
+  filter(term == "pm_krig") %>% 
+  select(estimate, conf.low, conf.high) %>% 
+  mutate_all(exp) %>% 
+  round(.,3) %>% 
+  cbind(state_strata, .)
+
+knitr::kable(results, 
+  caption = "Odds ratio and 95% CI between PM and asthma for each state")
+```
+
+No associatoin between increases in PM~2.5~ at the county level and asthma.
+
+### Distributed Lag Association
+
+Setting up lagged dataframe for Washington. Creating a lag function.
+```{r lagfun}
+# defining a lag function
+funlag <- function(var, n=7){
+  var <- enquo(var)
+  indices <- seq_len(n)
+  map( indices, ~quo(lag(!!var, !!.x)) ) %>% 
+    set_names(sprintf("%s_lag%d", rlang::quo_text(var), indices))
+}
+```
+
+Creating lagged dataframe.
+```{r distributed_lag}
+# continous pm lagged dataframe
+pm_lag <- pm %>% 
+  filter(str_sub(fips,start=1,end=2) %in% c("08","53", "41")) %>% 
+  select(fips, date, pm_krig, smoke10_hms, smoke15_hms) %>% 
+  mutate(pm = pm_krig/10) %>% 
+  arrange(fips, date) %>% 
+  group_by(fips) %>% 
+  mutate(., !!!funlag(pm,6), !!!funlag(smoke10_hms,6),
+         !!!funlag(smoke15_hms,6))
+```
+
+Subset to just Washington so my models run faster. Joining lagged PM values to Washington state. 
+
+```{r washington}
+asthma_w <- asthma %>% 
+  filter(state == "washington") %>% 
+  select(-c(pm_krig, smoke10_hms, smoke15_hms)) %>% 
+  left_join(pm_lag, by = c("fips", "date"))
+```
+
+Before I test for interaction, I'm going to start by evaluating the lagged relationship between PM~2.5~ and asthma. Perhaps misclassification at the county level requires accounting for the variation over a couple days before anything is observed? Just a thought. 
+
+```{r lagged_matrix}
+# create lagged matrix
+pm_mat <- as.matrix(select(asthma_w, pm, contains("pm_lag")))
+smk10_mat <- as.matrix(select(asthma_w, contains("smoke10_hms")))
+smk15_mat <- as.matrix(select(asthma_w, contains("smoke15_hms")))
+```
+
+Defining a lagged exposure basis using 3 degrees of freedom and multiply the exposure basis by spline.
+
+```{r define exposure basis}
+# lagged basis spline
+exp_b <- ns(0:6, df = 3, intercept = T)
+# lagged pm x basis
+pm_basis <- pm_mat %*% exp_b
+# smk10 basis
+smk10_basis <- smk10_mat %*% exp_b
+# smk15 basis
+smk15_basis <- smk15_mat %*% exp_b
+```
+
+#### Cumulative lagged effect of PM~2.5~
+
+Running distributed lag of PM~2.5~ without indicators of smoke.
+```{r pm_lag_mod}
+# pm model
+mod <- clogit(outcome ~ pm_basis + temp_f + strata(id), data = asthma_w)
+```
+
+PM smoke estimates for lagged days.
+
+```{r pm_lag_est}
+# output pm basis estimates
+pm_parms <- broom::tidy(mod) %>% 
+  filter(stringr::str_detect(term, "pm")) %>% 
+  select(estimate) %>% 
+  as_vector()
+# output estimate names for cov matrix
+pm_names <- stringr::str_subset(names(mod$coefficients), "pm")
+
+# estimate associations
+pm_est <- exp_b %*% pm_parms
+# cumulative estimates
+pm_c_est <- sapply(seq_along(pm_est), function(x){
+              sum(pm_est[1:x])
+            })
+# estimate standard error for each interval
+# time variable
+time <- ((rep(1:length(pm_est))-1))
+# covariance matrix for knots 
+pm_cov_mat <- as.matrix(vcov(mod))[pm_names, pm_names]
+# estimate variance of spline
+pm_var <- exp_b %*% pm_cov_mat %*% t(exp_b)
+# stderr cumulative effect smk
+pm_c_se <- sapply(seq_along(pm_c_est), function(y){
+              sqrt(sum(pm_var[1:y,1:y]))
+           })
+# estimate 95% CI
+c_pm_l95 <- pm_c_est+(pm_c_se*qnorm(1-0.975))
+c_pm_u95 <- pm_c_est+(pm_c_se*qnorm(0.975))
+
+# return dataframe
+c_estimate <- data.frame(time, exp(pm_c_est), exp(c_pm_l95), 
+  exp(c_pm_u95), row.names = NULL)
+# assign column names
+colnames(c_estimate) <- c("time", "odds_ratio", "lower_95", "upper_95")
+
+knitr::kable(c_estimate, 
+             caption = "Association between lagged PM2.5 and asthma")
+```
+
+Plot of cumulative effect of a 10 ug m^-3^ increase in PM~2.5~ on risk for asthma event using distributed lag in Washington state.
+
+```{r pm_plot}
+plot <- ggplot(c_estimate, aes(x=time, y=odds_ratio)) +
+  geom_line(colour = "blue", size = 1) +
+  geom_ribbon(aes(ymin = lower_95, ymax = upper_95), 
+              fill = "blue", alpha = 0.3) + 
+  scale_x_continuous(breaks = c(seq(0,7, by=1))) +
+  geom_hline(yintercept = 1, linetype = 2, colour = "red") +
+  ylab(expression("Odds Ratio: 10 ug/m^3 increase PM"[2.5])) +
+  xlab("Lagged Days") +
+  ggtitle("Lagged PM2.5 and relative association for asthma") +
+  theme(panel.grid.major.x = element_blank(),
+        panel.grid.major.y = element_line(linetype = "dotted"),
+        panel.grid.minor = element_blank()) +
+  theme_minimal()
+
+print(plot)
+```
+
+#### Cumulative lagged effect of binary smoke 15 exposure
+
+Evaluating binary smoke cutoff > 10 ug m^-3^.
+
+```{r smk_lag_mod}
+# pm model
+mod <- clogit(outcome ~ smk10_basis + temp_f + strata(id), data = asthma_w)
+```
+
+PM smoke estimates for lagged days.
+
+```{r smk_lag_est}
+# output pm basis estimates
+parms <- broom::tidy(mod) %>% 
+  filter(stringr::str_detect(term, "smk")) %>% 
+  select(estimate) %>% 
+  as_vector()
+# output estimate names for cov matrix
+names <- stringr::str_subset(names(mod$coefficients), "smk")
+
+# estimate associations
+est <- exp_b %*% parms
+
+# cumulative estimates
+c_est <- sapply(seq_along(est), function(x){
+              sum(est[1:x])
+            })
+
+# estimate standard error for each interval
+# time variable
+time <- ((rep(1:length(est))-1))
+# covariance matrix for knots 
+cov_mat <- as.matrix(vcov(mod))[names, names]
+# estimate variance of spline
+var <- exp_b %*% cov_mat %*% t(exp_b)
+# stderr cumulative effect smk
+c_se <- sapply(seq_along(c_est), function(y){
+              sqrt(sum(var[1:y,1:y]))
+           })
+
+# estimate 95% CI
+c_l95 <- c_est+(c_se*qnorm(1-0.975))
+c_u95 <- c_est+(c_se*qnorm(0.975))
+
+# return dataframe
+c_estimate <- data.frame(time, exp(c_est), exp(c_l95), 
+  exp(c_u95), row.names = NULL)
+# assign column names
+colnames(c_estimate) <- c("time", "odds_ratio", "lower_95", "upper_95")
+
+knitr::kable(c_estimate, 
+             caption = "Association between lagged smoke and asthma")
+```
+
+Looks like the association is significant on the day after.
+
+```{r smoke_dl_plot}
+plot <- ggplot(c_estimate, aes(x=time, y=odds_ratio)) +
+  geom_line(colour = "blue", size = 1) +
+  geom_ribbon(aes(ymin = lower_95, ymax = upper_95), 
+              fill = "blue", alpha = 0.3) + 
+  scale_x_continuous(breaks = c(seq(0,7, by=1))) +
+  geom_hline(yintercept = 1, linetype = 2, colour = "red") +
+  ylab(expression("Smoke (Yes vs No)")) +
+  xlab("Lagged Days") +
+  ggtitle("Lagged smoke and relative association for asthma") +
+  theme(panel.grid.major.x = element_blank(),
+        panel.grid.major.y = element_line(linetype = "dotted"),
+        panel.grid.minor = element_blank()) +
+  theme_minimal()
+
+print(plot)
+```
+
+#### Interaction Model
+
+Setting up the PM matrix for smoke and non-smoke days.
+```{r pm_nosmk_mat}
+# smoke days
+pm_smk_b <- pm_basis * smk10_basis 
+# no smoke days
+pm_nosmk_b <- pm_basis * ifelse(smk10_basis == 1, 0, 1)
+```
+
+Model with interaction, including smoke basis in the model.
+
+```{r int_mod}
+mod <- clogit(outcome ~ pm_smk_b + pm_nosmk_b + smk10_basis + temp_f +
+                strata(id), data = asthma_w)
+```
+
+Making a function to calculate lagged association for each basis.
+
+```{r dl_fun}
+distribute_that_lag <- function(model, strata){
+  # output pm basis estimates
+  parms <- broom::tidy(mod) %>% 
+    filter(stringr::str_detect(term, strata)) %>% 
+    select(estimate) %>% 
+    as_vector()
+  # output estimate names for cov matrix
+  names <- stringr::str_subset(names(mod$coefficients), strata)
+  # estimate associations
+  est <- exp_b %*% parms
+  # cumulative estimates
+  c_est <- sapply(seq_along(est), function(x){
+                sum(est[1:x])
+              })
+  # estimate standard error for each interval
+  # time variable
+  time <- ((rep(1:length(est))-1))
+  # covariance matrix for knots 
+  cov_mat <- as.matrix(vcov(mod))[names, names]
+  # estimate variance of spline
+  var <- exp_b %*% cov_mat %*% t(exp_b)
+  
+  # stderr cumulative effect smk
+  c_se <- sapply(seq_along(c_est), function(y){
+                sqrt(sum(var[1:y,1:y]))
+             })
+  # estimate 95% CI
+  c_l95 <- c_est+(c_se*qnorm(1-0.975))
+  c_u95 <- c_est+(c_se*qnorm(0.975))
+  # return dataframe
+  c_estimate <- data.frame(strata, time, exp(c_est), exp(c_l95), 
+    exp(c_u95), row.names = NULL)
+  # assign column names
+  colnames(c_estimate) <- c("strata", "time", "odds_ratio", "lower_95",
+                            "upper_95")
+  return(c_estimate)
+} # end function
+```
+
+Estimating terms for PM in the presence of smoke, PM without smoke, and smoke.
+
+```{r interaction_results}
+int_results <- as.character(c("pm_smk", "pm_nosmk", "smk10")) %>% 
+  map_dfr(~distribute_that_lag(mod, .))
+```
+
+Plot of each term in the interaction model.
+
+```{r}
+plot <- ggplot(int_results, aes(x=time, y=odds_ratio)) +
+  geom_line(colour = "blue", size = 1) +
+  geom_ribbon(aes(ymin = lower_95, ymax = upper_95), 
+              fill = "blue", alpha = 0.3) + 
+  scale_x_continuous(breaks = c(seq(0,7, by=1))) +
+  geom_hline(yintercept = 1, linetype = 2, colour = "red") +
+  facet_wrap(~strata, scales = "free_y") +
+  ylab(expression("Odds Ratio")) +
+  xlab("Lagged Days") +
+  ggtitle("Washington") +
+  theme(panel.grid.major.x = element_blank(),
+        panel.grid.major.y = element_line(linetype = "dotted"),
+        panel.grid.minor = element_blank()) +
+  theme_minimal()
+
+print(plot)
+```
+
+I've added the binary smoke basis in as well. I suppose if I were to interpret this, the effect of a 10 ug m^-3^ increase on non-smoke days, is inversely associated as PM increases, and this effect trends towards null effect as the over subsequent lagged exposure. PM on smoke days increases over time, but this trend is not significant. Same with binary smoke 10.
+
+### Colorado and Washington
+
+Running this interaction model for Colorado and Washington to compare with my distributed lag results from the time-series models.
+
+```{r co_wash}
+asthma_lag <- asthma %>% 
+  filter(state %in% c("colorado", "washington")) %>% 
+  select(-c(pm_krig, smoke10_hms, smoke15_hms)) %>% 
+  left_join(pm_lag, by = c("fips", "date")) %>% 
+  filter(!is.na(pm_lag6))
+
+# create lagged matrix
+pm_mat <- as.matrix(select(asthma_lag, pm, contains("pm_lag")))
+smk10_mat <- as.matrix(select(asthma_lag, contains("smoke10_hms")))
+smk15_mat <- as.matrix(select(asthma_lag, contains("smoke15_hms")))
+# lagged basis spline
+exp_b <- ns(0:6, df = 3, intercept = T)
+# lagged pm x basis
+pm_basis <- pm_mat %*% exp_b
+# smk10 basis
+smk10_basis <- smk10_mat %*% exp_b
+# smoke days
+pm_smk_b <- pm_basis * smk10_basis 
+# no smoke days
+pm_nosmk_b <- pm_basis * ifelse(smk10_basis == 1, 0, 1)
+```
+
+Model with interaction, including smoke basis in the model.
+
+```{r full_int_mod}
+mod <- clogit(outcome ~ pm_smk_b + pm_nosmk_b + smk10_basis + temp_f +
+                strata(id), data = asthma_lag)
+```
+
+Extract term estimates. 
+```{r full_int_results}
+int_results <- as.character(c("pm_smk", "pm_nosmk", "smk10")) %>% 
+  map_dfr(~distribute_that_lag(mod, .))
+```
+
+Plot interaction results
+```{r dl_results_co_wa}
+plot <- ggplot(int_results, aes(x=time, y=odds_ratio)) +
+  geom_line(colour = "blue", size = 1) +
+  geom_ribbon(aes(ymin = lower_95, ymax = upper_95), 
+              fill = "blue", alpha = 0.3) + 
+  scale_x_continuous(breaks = c(seq(0,7, by=1))) +
+  geom_hline(yintercept = 1, linetype = 2, colour = "red") +
+  facet_wrap(~strata, scales = "free_y") +
+  ylab(expression("Odds Ratio")) +
+  xlab("Lagged Days") +
+  ggtitle("Washington and Colorado Interaction Model") +
+  theme(panel.grid.major.x = element_blank(),
+        panel.grid.major.y = element_line(linetype = "dotted"),
+        panel.grid.minor = element_blank()) +
+  theme_minimal()
+
+print(plot)
+```
