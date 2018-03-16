@@ -1,0 +1,146 @@
+---
+title: "2010-2015 Case-Crossover Sensitivity Analysis"
+author: "Ryan Gan"
+date: '2018-03-16'
+output: html_notebook
+editor_options: 
+  chunk_output_type: inline
+---
+
+```{r setup}
+library(tidyverse)
+library(survival)
+library(splines)
+library(stringr)
+
+```
+
+
+```{r casecross_list}
+load("../../data/health/1015-morbidity_casecross_list.RData")
+
+# filter list to just washington and colorado and months april through october
+casecross_analysis_list <- casecross_list %>% 
+  map(~filter(., state != "oregon") %>% 
+        mutate(month = as.factor(lubridate::month(date))) %>% 
+        filter(month %in% 4:10))
+
+# remove casecross_list to save memory
+rm(casecross_list)
+```
+
+```{r lagfun}
+# defining a lag function
+funlag <- function(var, n=7){
+  var <- enquo(var)
+  indices <- seq_len(n)
+  map( indices, ~quo(lag(!!var, !!.x)) ) %>% 
+    set_names(sprintf("%s_lag%d", rlang::quo_text(var), indices))
+}
+```
+
+```{r pm_data}
+pm <- read_csv("../../data/smoke/1015-county_popwt_pm.csv") %>% 
+  filter(str_sub(fips,start=1,end=2) %in% c("53", "08")) %>% 
+  rename(pm_diff = pm_smk) %>% 
+  mutate(day = as.factor(weekdays(date)),
+    weekend = ifelse(day %in% c("Saturday", "Sunday"), 1, 0),
+    month = as.factor(lubridate::month(date)),
+    year = as.factor(lubridate::year(date)),
+    season = as.factor(case_when(month %in% c(12, 1, 2) ~ "winter",
+                                 month %in% c(3:5) ~ "spring",
+                                 month %in% c(6:8) ~ "summer",
+                                 month %in% c(9:11)~ "fall")),
+    smoke0_hms = ifelse(pm_diff > 0 & month %in% c(3:10) & hms > 0.5, 1, 0),
+    smoke5_hms = ifelse(pm_diff > 5 & month %in% c(3:10) & hms > 0.1, 1, 0),
+    smoke10_hms = ifelse(pm_diff > 10 & month %in% c(3:10) & hms > 0.1, 1, 0),
+    smoke15_hms = ifelse(pm_diff > 15 & month %in% c(3:10) & hms > 0.1, 1, 0),
+    pm = pm_krig/10) %>% 
+  arrange(fips, date) %>% 
+  group_by(fips) %>% 
+  mutate(., !!!funlag(pm,6), !!!funlag(smoke0_hms,6), !!!funlag(smoke5_hms,6),
+         !!!funlag(smoke10_hms,6), !!!funlag(smoke15_hms,6)) %>% 
+  select(-state, -month)
+
+check <- filter(pm, fips %in% c("08001", "08003")) %>% filter(date > "2015-12-28" | date < "2010-01-03") %>% select(fips, pm:pm_lag6)
+
+
+```
+
+
+```{r}
+asthma <- casecross_analysis_list$asthma %>% 
+  mutate(date = as.Date(date),
+         outcome = as.numeric(as.character(outcome))) %>% 
+  left_join(pm, by = c("date", "fips")) 
+```
+
+```{r}
+mod <- clogit(outcome ~ pm*smoke0_hms + temp_f + strata(id), data = asthma)
+summary(mod)
+```
+
+```{r funtion_to_extract_lagged_est}
+distribute_that_lag <- function(model, strata){
+  # output pm basis estimates
+  parms <- broom::tidy(model) %>% 
+    filter(stringr::str_detect(term, strata)) %>% 
+    select(estimate) %>% 
+    as_vector()
+  # output estimate names for cov matrix
+  names <- stringr::str_subset(names(mod$coefficients), strata)
+  # estimate associations
+  est <- exp_b %*% parms
+  # cumulative estimates
+  c_est <- sapply(seq_along(est), function(x){
+                sum(est[1:x])
+              })
+  # estimate standard error for each interval
+  # time variable
+  time <- ((rep(1:length(est))-1))
+  # covariance matrix for knots 
+  cov_mat <- as.matrix(vcov(model))[names, names]
+  # estimate variance of spline
+  var <- exp_b %*% cov_mat %*% t(exp_b)
+  
+  # stderr cumulative effect smk
+  c_se <- sapply(seq_along(c_est), function(y){
+                sqrt(sum(var[1:y,1:y]))
+             })
+  # estimate 95% CI
+  c_l95 <- c_est+(c_se*qnorm(1-0.975))
+  c_u95 <- c_est+(c_se*qnorm(0.975))
+  # return dataframe
+  c_estimate <- data.frame(strata, time, exp(c_est), exp(c_l95), 
+    exp(c_u95), row.names = NULL)
+  # assign column names
+  colnames(c_estimate) <- c("strata", "time", "odds_ratio", "lower_95",
+                            "upper_95")
+  return(c_estimate)
+} # end function
+```
+
+Set up lag matrices.
+```{r}
+# create lagged matrix
+pm_mat <- as.matrix(select(asthma, pm, contains("pm_lag")))
+smk0_mat <- as.matrix(select(asthma, contains("smoke0_hms")))
+smk5_mat <- as.matrix(select(asthma, contains("smoke5_hms")))
+smk10_mat <- as.matrix(select(asthma, contains("smoke10_hms")))
+smk15_mat <- as.matrix(select(asthma, contains("smoke15_hms")))
+
+# lagged basis spline
+exp_b <- ns(0:6, df = 3, intercept = T)
+# lagged pm x basis
+pm_basis <- pm_mat %*% exp_b
+smk0_basis <- smk0_mat %*% exp_b
+smk5_basis <- smk5_mat %*% exp_b
+smk10_basis <- smk10_mat %*% exp_b
+smk15_basis <- smk15_mat %*% exp_b
+
+
+lag_mod <- clogit(outcome ~ smk0_basis + strata(id), data = asthma)
+summary(lag_mod)
+distribute_that_lag(model = lag_mod, strata = "smk0_basis")
+```
+

@@ -93,15 +93,13 @@ asthma <- read_csv("../../data/health/1015-asthma_casecross",
 
 Running conditional logistic regression models to account for within person design. Each observation has referent periods assigned within the same month as the event date. 
 
-#### Binary Smoke 10
+#### State-Specific Binary Smoke 10
 
 Regressing binary event yes or no on binary smoke where the difference between estimated PM~2.5~ and seasonal median is > 10 ug/m^3 and HMS cover for the county is > 10%. Running by state to see if there is any state-level differences. 
 
 ```{r smoke10_state_association}
 states <- as.factor(sort(unique(asthma$state))) 
 state_strata <- sort(unique(asthma$state))
-  
-summary(as.factor(asthma$age_cat))
 
 results <- state_strata %>% 
   map(~filter(asthma, state == .)) %>% 
@@ -118,7 +116,7 @@ knitr::kable(results,
 
 Looks like there is an association in Washington but no association in Colorado or Oregon. We've seen an association in Oregon when PM was assigned at the ZIPCODE level using the blended models that I believe were at a finer resolution. The outcome for Oregon is also slightly different where we had to match the inpatient hospitalizations admitted through the ER in Colorado and Washington. Oregon has no direct variable to do this, so Jingyang found observations by the same person that were within a day or two admitted first to the ER, then to inpatient.  
 
-#### Binary Smoke 15
+#### State-Specific Binary Smoke 15
 
 Running conditional logistic regression models for binary smoke where the difference between estimated PM~2.5~ and seasonal median is > 15 ug/m^3 and HMS cover for the county is > 10%. Running by state to see if there is any state-level differences. 
 
@@ -138,7 +136,7 @@ knitr::kable(results,
 
 Association even stronger for Washington, but inverse associations for Colorado and Oregon. Could be real where people generally tried to avoid high PM days with visible smoke.
 
-#### Continous PM
+#### State-Specific Continous PM~2.5~
 
 Evaluating continous PM~2.5~. 
 
@@ -162,6 +160,7 @@ No associatoin between increases in PM~2.5~ at the county level and asthma.
 ### Distributed Lag Association
 
 Setting up lagged dataframe for Washington. Creating a lag function.
+
 ```{r lagfun}
 # defining a lag function
 funlag <- function(var, n=7){
@@ -173,6 +172,7 @@ funlag <- function(var, n=7){
 ```
 
 Creating lagged dataframe.
+
 ```{r distributed_lag}
 # continous pm lagged dataframe
 pm_lag <- pm %>% 
@@ -216,7 +216,7 @@ smk10_basis <- smk10_mat %*% exp_b
 smk15_basis <- smk15_mat %*% exp_b
 ```
 
-#### Cumulative lagged effect of PM~2.5~
+#### Washington: Cumulative Lagged effect of PM~2.5~
 
 Running distributed lag of PM~2.5~ without indicators of smoke.
 ```{r pm_lag_mod}
@@ -266,6 +266,8 @@ knitr::kable(c_estimate,
              caption = "Association between lagged PM2.5 and asthma")
 ```
 
+#### Washington Cumulative Lagged Effect
+
 Plot of cumulative effect of a 10 ug m^-3^ increase in PM~2.5~ on risk for asthma event using distributed lag in Washington state.
 
 ```{r pm_plot}
@@ -286,7 +288,7 @@ plot <- ggplot(c_estimate, aes(x=time, y=odds_ratio)) +
 print(plot)
 ```
 
-#### Cumulative lagged effect of binary smoke 15 exposure
+#### Washington: Cumulative Lagged Effect of binary smoke 15 exposure
 
 Evaluating binary smoke cutoff > 10 ug m^-3^.
 
@@ -360,7 +362,7 @@ plot <- ggplot(c_estimate, aes(x=time, y=odds_ratio)) +
 print(plot)
 ```
 
-#### Interaction Model
+#### Washington: Distributed Lag Cumulative Effect Interaction Model
 
 Setting up the PM matrix for smoke and non-smoke days.
 ```{r pm_nosmk_mat}
@@ -428,7 +430,7 @@ int_results <- as.character(c("pm_smk", "pm_nosmk", "smk10")) %>%
 
 Plot of each term in the interaction model.
 
-```{r}
+```{r plot_dl1}
 plot <- ggplot(int_results, aes(x=time, y=odds_ratio)) +
   geom_line(colour = "blue", size = 1) +
   geom_ribbon(aes(ymin = lower_95, ymax = upper_95), 
@@ -449,7 +451,81 @@ print(plot)
 
 I've added the binary smoke basis in as well. I suppose if I were to interpret this, the effect of a 10 ug m^-3^ increase on non-smoke days, is inversely associated as PM increases, and this effect trends towards null effect as the over subsequent lagged exposure. PM on smoke days increases over time, but this trend is not significant. Same with binary smoke 10.
 
-### Colorado and Washington
+### Washington 2012 Interaction Model Fire Season
+
+I am going to subset to the 2012 wildfire season (April through October) for Washington state to compare results to the 2012 Wildfire paper in GeoHealth.
+
+```{r wa_2012}
+wa_2012 <- asthma %>% 
+  filter(state == "washington") %>% 
+  filter(date >= "2012-03-01" & date <= "2012-11-01") %>% 
+  select(-c(pm_krig, smoke10_hms, smoke15_hms)) %>% 
+  left_join(pm_lag, by = c("fips", "date")) %>% 
+  filter(!is.na(pm_lag6))
+```
+
+Looking at the same-day association between PM~2.5~ and asthma. Same-day association looks similar in effect size to the GeoHealth paper, even though the magnitude is about 14% vs 7%. Perhaps there was something unique about the Wenatchee Fire Complex, or perhaps the way PM was measured (more monitors -> better daily estimates of PM)? Or maybe it could be the time-frame? Perhaps I should limit estimates to April through October to eliminate high PM in winter?
+
+```{r same_day_mod}
+exposure <- c("pm", "smoke10_hms", "smoke15_hms")
+
+results <-  exposure %>% 
+  map_dfr(., ~ broom::tidy(clogit(as.formula(paste0("outcome ~",., 
+    " + strata(id)")), data = wa_2012))) %>% 
+  select(estimate, conf.low, conf.high) %>% 
+  mutate_all(exp) %>% 
+  round(.,3) %>% 
+  cbind(exposure, .)
+
+knitr::kable(results, 
+  caption = "Odds ratio and 95% CI for PM and binary smoke and asthma")
+```
+
+Evaluating lagged interaction.
+
+```{r lagged_interaction}
+# create lagged matrix
+pm_mat <- as.matrix(select(wa_2012, pm, contains("pm_lag")))
+smk10_mat <- as.matrix(select(wa_2012, contains("smoke10_hms")))
+# lagged basis spline
+exp_b <- ns(0:6, df = 3, intercept = T)
+# lagged pm x basis
+pm_basis <- pm_mat %*% exp_b
+# smk10 basis
+smk10_basis <- smk10_mat %*% exp_b
+# smoke days
+pm_smk_b <- pm_basis * smk10_basis 
+# no smoke days
+pm_nosmk_b <- pm_basis * ifelse(smk10_basis == 1, 0, 1)
+
+# interaction model
+mod <- clogit(outcome ~ pm_smk_b + pm_nosmk_b + smk10_basis + 
+                strata(id), data = wa_2012)
+# lagged estimates
+int_results <- as.character(c("pm_smk", "pm_nosmk", "smk10")) %>% 
+  map_dfr(~distribute_that_lag(mod, .))
+
+plot <- ggplot(int_results, aes(x=time, y=odds_ratio)) +
+  geom_line(colour = "blue", size = 1) +
+  geom_ribbon(aes(ymin = lower_95, ymax = upper_95), 
+              fill = "blue", alpha = 0.3) + 
+  scale_x_continuous(breaks = c(seq(0,7, by=1))) +
+  geom_hline(yintercept = 1, linetype = 2, colour = "red") +
+  facet_wrap(~strata, scales = "free_y") +
+  ylab(expression("Odds Ratio")) +
+  xlab("Lagged Days") +
+  ggtitle("Washington 2012 Interaction Model") +
+  theme(panel.grid.major.x = element_blank(),
+        panel.grid.major.y = element_line(linetype = "dotted"),
+        panel.grid.minor = element_blank()) +
+  theme_minimal()
+
+print(plot)
+```
+
+When I run an interaction model here, a couple things stick out. First, I don't think there is a difference in the effect size of PM~2.5~ on non-smoke days vs smoke days. The shape may be slightly different, over time.
+
+### Colorado and Washington Interaction Model
 
 Running this interaction model for Colorado and Washington to compare with my distributed lag results from the time-series models.
 
@@ -474,23 +550,13 @@ smk10_basis <- smk10_mat %*% exp_b
 pm_smk_b <- pm_basis * smk10_basis 
 # no smoke days
 pm_nosmk_b <- pm_basis * ifelse(smk10_basis == 1, 0, 1)
-```
-
-Model with interaction, including smoke basis in the model.
-
-```{r full_int_mod}
+# model
 mod <- clogit(outcome ~ pm_smk_b + pm_nosmk_b + smk10_basis + temp_f +
                 strata(id), data = asthma_lag)
-```
-
-Extract term estimates. 
-```{r full_int_results}
+# extract lagged results
 int_results <- as.character(c("pm_smk", "pm_nosmk", "smk10")) %>% 
   map_dfr(~distribute_that_lag(mod, .))
-```
-
-Plot interaction results
-```{r dl_results_co_wa}
+# plot results
 plot <- ggplot(int_results, aes(x=time, y=odds_ratio)) +
   geom_line(colour = "blue", size = 1) +
   geom_ribbon(aes(ymin = lower_95, ymax = upper_95), 
@@ -508,3 +574,196 @@ plot <- ggplot(int_results, aes(x=time, y=odds_ratio)) +
 
 print(plot)
 ```
+
+### Washington Colorado April to October Interaction Model
+
+Limiting years to only include months April through October.
+
+```{r co_wa_apr_oct}
+asthma_lag <- asthma %>% 
+  filter(state %in% c("colorado", "washington")) %>% 
+  filter(month %in% 4:10) %>% 
+  select(-c(pm_krig, smoke10_hms, smoke15_hms)) %>% 
+  left_join(pm_lag, by = c("fips", "date")) %>% 
+  filter(!is.na(pm_lag6))
+# create lagged matrix
+pm_mat <- as.matrix(select(asthma_lag, pm, contains("pm_lag")))
+smk10_mat <- as.matrix(select(asthma_lag, contains("smoke10_hms")))
+smk15_mat <- as.matrix(select(asthma_lag, contains("smoke15_hms")))
+# lagged basis spline
+exp_b <- ns(0:6, df = 3, intercept = T)
+# lagged pm x basis
+pm_basis <- pm_mat %*% exp_b
+# smk10 basis
+smk10_basis <- smk10_mat %*% exp_b
+# smoke days
+pm_smk_b <- pm_basis * smk10_basis 
+# no smoke days
+pm_nosmk_b <- pm_basis * ifelse(smk10_basis == 1, 0, 1)
+# model
+mod <- clogit(outcome ~ pm_smk_b + pm_nosmk_b + smk10_basis + temp_f +
+                strata(id), data = asthma_lag)
+# extract lagged results
+int_results <- as.character(c("pm_smk", "pm_nosmk", "smk10")) %>% 
+  map_dfr(~distribute_that_lag(mod, .))
+# plot results
+plot <- ggplot(int_results, aes(x=time, y=odds_ratio)) +
+  geom_line(colour = "blue", size = 1) +
+  geom_ribbon(aes(ymin = lower_95, ymax = upper_95), 
+              fill = "blue", alpha = 0.3) + 
+  scale_x_continuous(breaks = c(seq(0,7, by=1))) +
+  geom_hline(yintercept = 1, linetype = 2, colour = "red") +
+  facet_wrap(~strata, scales = "free_y") +
+  ylab(expression("Odds Ratio")) +
+  xlab("Lagged Days") +
+  ggtitle("Washington and Colorado Interaction Model") +
+  theme(panel.grid.major.x = element_blank(),
+        panel.grid.major.y = element_line(linetype = "dotted"),
+        panel.grid.minor = element_blank()) +
+  theme_minimal()
+
+print(plot)
+```
+
+No association with PM on non-smoke days, but perhaps an association with PM on smoke days 3 or 4 days after. I do notice differences by state. Showing that here.
+
+#### Washington April to October INteraction Model
+
+Showing association for only Washington state. 
+```{r wa_apr_oct}
+asthma_lag <- asthma %>% 
+  filter(state %in% c("washington")) %>% 
+  filter(month %in% 4:10) %>% 
+  select(-c(pm_krig, smoke10_hms, smoke15_hms)) %>% 
+  left_join(pm_lag, by = c("fips", "date")) %>% 
+  filter(!is.na(pm_lag6))
+# create lagged matrix
+pm_mat <- as.matrix(select(asthma_lag, pm, contains("pm_lag")))
+smk10_mat <- as.matrix(select(asthma_lag, contains("smoke10_hms")))
+smk15_mat <- as.matrix(select(asthma_lag, contains("smoke15_hms")))
+# lagged basis spline
+exp_b <- ns(0:6, df = 3, intercept = T)
+# lagged pm x basis
+pm_basis <- pm_mat %*% exp_b
+# smk10 basis
+smk10_basis <- smk10_mat %*% exp_b
+# smoke days
+pm_smk_b <- pm_basis * smk10_basis 
+# no smoke days
+pm_nosmk_b <- pm_basis * ifelse(smk10_basis == 1, 0, 1)
+# model
+mod <- clogit(outcome ~ pm_smk_b + pm_nosmk_b + smk10_basis + temp_f +
+                strata(id), data = asthma_lag)
+# extract lagged results
+int_results <- as.character(c("pm_smk", "pm_nosmk", "smk10")) %>% 
+  map_dfr(~distribute_that_lag(mod, .))
+# plot results
+plot <- ggplot(int_results, aes(x=time, y=odds_ratio)) +
+  geom_line(colour = "blue", size = 1) +
+  geom_ribbon(aes(ymin = lower_95, ymax = upper_95), 
+              fill = "blue", alpha = 0.3) + 
+  scale_x_continuous(breaks = c(seq(0,7, by=1))) +
+  geom_hline(yintercept = 1, linetype = 2, colour = "red") +
+  facet_wrap(~strata, scales = "free_y") +
+  ylab(expression("Odds Ratio")) +
+  xlab("Lagged Days") +
+  ggtitle("Washington Interaction Model") +
+  theme(panel.grid.major.x = element_blank(),
+        panel.grid.major.y = element_line(linetype = "dotted"),
+        panel.grid.minor = element_blank()) +
+  theme_minimal()
+
+print(plot)
+```
+ 
+Both PM on smoke and non-smoke days likely increase risk for asthma hospitalizations, however the slope may be more pronounced and extreme for PM due to smoke 3 or 4 days after.
+ 
+#### Colorado April to October Interaction MOdel
+
+Colorado distributed lag interaciton models.
+```{r co_apr_oct}
+asthma_lag <- asthma %>% 
+  filter(state %in% c("colorado")) %>% 
+  filter(month %in% 4:10) %>% 
+  select(-c(pm_krig, smoke10_hms, smoke15_hms)) %>% 
+  left_join(pm_lag, by = c("fips", "date")) %>% 
+  filter(!is.na(pm_lag6))
+# create lagged matrix
+pm_mat <- as.matrix(select(asthma_lag, pm, contains("pm_lag")))
+smk10_mat <- as.matrix(select(asthma_lag, contains("smoke10_hms")))
+smk15_mat <- as.matrix(select(asthma_lag, contains("smoke15_hms")))
+# lagged basis spline
+exp_b <- ns(0:6, df = 3, intercept = T)
+# lagged pm x basis
+pm_basis <- pm_mat %*% exp_b
+# smk10 basis
+smk10_basis <- smk10_mat %*% exp_b
+# smoke days
+pm_smk_b <- pm_basis * smk10_basis 
+# no smoke days
+pm_nosmk_b <- pm_basis * ifelse(smk10_basis == 1, 0, 1)
+# model
+mod <- clogit(outcome ~ pm_smk_b + pm_nosmk_b + smk10_basis + temp_f +
+                strata(id), data = asthma_lag)
+# extract lagged results
+int_results <- as.character(c("pm_smk", "pm_nosmk", "smk10")) %>% 
+  map_dfr(~distribute_that_lag(mod, .))
+# plot results
+plot <- ggplot(int_results, aes(x=time, y=odds_ratio)) +
+  geom_line(colour = "blue", size = 1) +
+  geom_ribbon(aes(ymin = lower_95, ymax = upper_95), 
+              fill = "blue", alpha = 0.3) + 
+  scale_x_continuous(breaks = c(seq(0,7, by=1))) +
+  geom_hline(yintercept = 1, linetype = 2, colour = "red") +
+  facet_wrap(~strata, scales = "free_y") +
+  ylab(expression("Odds Ratio")) +
+  xlab("Lagged Days") +
+  ggtitle("Colorado Interaction Model") +
+  theme(panel.grid.major.x = element_blank(),
+        panel.grid.major.y = element_line(linetype = "dotted"),
+        panel.grid.minor = element_blank()) +
+  theme_minimal()
+
+print(plot)
+```
+
+You can see that Colorado has some very weird shapes that really don't make too much sense. 
+
+I couldn't even fit models with Oregon in a timely manner. 
+
+### Exploring Possible Non-Linearity in PM Response
+
+I'm going to try one more thing. I'm interested in non-linear associations with PM, and the distributed lag non-linear models can accomplish this, but that seems complicated. So I'm going to create some dummy variables of categories of PM instead. I'll look just at Washington.
+
+```{r pm_cat_lag}
+# pm category
+pm_cat <- pm %>% 
+  filter(str_sub(fips,start=1,end=2) %in% c("53")) %>% 
+  select(fips, date, pm_krig) %>% 
+  mutate(pm_cat = factor(case_when(pm_krig <= 10 ~ "0-10", 
+    pm_krig > 10 & pm_krig <= 20 ~ "10-20",
+    pm_krig > 20 & pm_krig <= 50 ~ "20-50",
+    pm_krig > 50 ~ ">50"), levels = c("0-10", "10-20", "20-50", ">50"))) 
+
+# asthma cat
+asthma_cat <- asthma %>% 
+  filter(state %in% c("washington")) %>% 
+  filter(month %in% 4:10) %>% 
+  select(-c(pm_krig, smoke10_hms, smoke15_hms)) %>% 
+  left_join(pm_cat, by = c("fips", "date")) 
+# model
+mod <- clogit(outcome ~ pm_cat + strata(id), asthma_cat)
+# output just odds ratio
+plot_df <- broom::tidy(mod) %>% 
+  select(term, estimate, conf.low, conf.high) %>% 
+  mutate_at(vars(estimate:conf.high), exp) %>% 
+  mutate(term = forcats::as_factor(term, c("pm_cat10-20", "pm_cat_20-50",
+                                             "pm_cat>50")))
+
+# plot odds ratio for categories
+ggplot(plot_df, aes(x=term, y=estimate)) +
+  geom_point() +
+  ylab("odds ratio")
+```
+
+Association looks more or less linear as PM increases. Probably not worth the effort to fit a non-linear distributed lag model.

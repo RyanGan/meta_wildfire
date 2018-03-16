@@ -1,5 +1,5 @@
 ---
-title: "2010-2015 Washington and Colorado Smoke and Morbidity"
+title: "2010-2015 Washington and Colorado Interaction Distributed Lag"
 author: "Ryan Gan"
 date: '2018-02-26'
 output:
@@ -117,6 +117,7 @@ print(plot)
 I'm struggling a bit with what the mean of the weighted county proportions covered by smoke mean exactly, but plotting each FIPS time series wasn't really helpful. Here is how I may interpret it: the higher the proportion, the more of the state with smoke in the atmospheric column for that day. So values of 1 would suggest the whole state has some detectable smoke overhead. It looks like most smoke occurs in times other than that winter months.
 
 ### Temperature in F
+
 Plotting temperature in F for each county in each state. Red line is the mean temperature for counties in the state.
 
 ```{r temp_plot}
@@ -224,38 +225,54 @@ Note, I saw very similar associations with the continuous smoke PM~2.5~ variable
 
 ### Distributed Lag Results
 
-Evaluating the cumulative lagged effect of up to a week of smoke exposure with distributed lag models. Same thing as above. These random-effects models were compuationally-expensive to run, so I ran them on the ozone server in parallel and I'm importing the results here. I've also only decided to evaluate distributed lag results for smoke10, smoke15, and smoke_wave since I think smoke0 and smoke5 don't have very great sensitivity or specificity (we should test this!).
+Evaluating the cumulative lagged effect of PM~2.5~ from smoke and not from smoke up to a week of smoke exposure with distributed lag models with an interaction. Same thing as above. These random-effects models were compuationally-expensive to run, so I ran them on the ozone server in parallel and I'm importing the results here. I've also only decided to evaluate distributed lag results for PM~2.5~ interacted with binary smoke smoke10_hms, smoke15_hms. Here, I define the binary cutoff for smoke
 
 ```{r import_dl_results}
-dl_results <- read_csv("../../data/health/1015-ts_smoke_dl_results.csv") %>% 
+dl_results <- read_csv(paste0("../../data/health/",
+  "1015-ts_dl_int_results-2018-03-14.csv")) %>% 
   filter(outcome != "cardiopulm_n") %>% 
   mutate(outcome = forcats::fct_relevel(outcome, out_order),
          group = as.factor(if_else(outcome %in% out_order[1:5],
           "respiratory", "cardiovascular")))
+
+glimpse(dl_results)
 ```
 
-Association between lagged smoke > 10 ug/m^3^ and cardiopulmonary outcomes. Models account for county as a random effect, adjust for month, year, weekend, and state as fixed effects. County population offset included. For each spline for the distributed lag effect, I've set the degrees of freedom/knots at 3 to allow for a flexible enough shape. Usually I pick the degrees of freedom based onlowest AIC, but I've never seen a shape that suggested anything more than a third-order polynomial (i.e. 5th order polynomials look like 3rd order).
+Association between lagged smoke > 10 ug/m^3^ and cardiopulmonary outcomes. I've included three basis functions in the model: the binary smoke indicator, PM~2.5~ on days with smoke, and PM~2.5~ on days without smoke. Models account for county as a random effect, temperature and weekend as a fixed effect, and a spline fit with 12 degrees of freedom fit to the date series in an attempt to account for unmeasured confounders that vary trends in the PM~2.5~ series. I included ounty population offsets as well. For each spline for the distributed lag effect, I've set the degrees of freedom/knots at 3 to allow for a flexible enough shape. Usually I pick the degrees of freedom based onlowest AIC, but I've never seen a shape that suggested anything more than a third-order polynomial (i.e. 5th order polynomials look like 3rd order).
 
-#### Smoke 10
+#### Interaction by Smoke 10 Binary Indicator
 
-Plotting the cumulative distributed lag association of the binary smoke > 10 classifier and rate ratio.
+Plotting the cumulative distributed lag association of PM~2.5~ interacted with binary smoke > 10 classifier and rate ratio. I'm going to plot the respiratory outcomes first so that the plots are easier to read.
 
-```{r dl_smk10_results}
+##### Cumulative Effect of PM~2.5~ on Respiratory Outcomes
+
+I've left out the binary smoke basis because I'm not sure if has a useful interpretation here when PM~2.5~ is included. I'm only going to look at the all respiratory, asthma, and COPD.
+
+```{r dl_smk10_resp_results}
 # filter to smoke 10 results
-cumulative_results <- dl_results %>% 
-  filter(exposure == "smoke10" & type == "cumulative")
+resp_cumulative_results <- dl_results %>% 
+  filter(exposure == "smoke10_hms" & type == "cumulative" &
+           outcome %in% c("resp", "asthma", "copd") & smoke != "smk") %>% 
+  mutate(strata = ifelse(smoke == "pm_smk", "Smoke", "No Smoke"),
+    outcome_full = case_when(outcome == "resp" ~ "Respiratory",
+                             outcome == "asthma" ~ "Asthma",
+                             outcome == "copd" ~ "COPD"),
+    out_strata = factor(paste0(outcome_full, "\n ", strata), 
+      levels = c("Respiratory\n No Smoke", "Respiratory\n Smoke",
+                 "Asthma\n No Smoke", "Asthma\n Smoke",
+                 "COPD\n No Smoke", "COPD\n Smoke")))
 
 # plot
-plot <- ggplot(cumulative_results, aes(x=time, y=estimate)) +
+plot <- ggplot(resp_cumulative_results, aes(x=time, y=estimate)) +
   geom_line(colour = "#0ed2f7", size = 1) +
   geom_ribbon(aes(ymin = lower95, ymax = upper95), 
               fill = "#b2fefa", alpha = 0.3) + 
   scale_x_continuous(breaks = c(seq(0,7, by=1))) +
   geom_hline(yintercept = 1, linetype = 2, colour = "red") +
-  facet_wrap(~outcome, scales="free_y") +
-  ylab("Rate Ratio: Exposed to Smoke (Yes vs. No)") +
+  facet_wrap(~out_strata, ncol = 2) +
+  ylab("Rate Ratio for a 10 ug/m^3in PM2.5") +
   xlab("Lagged Days") +
-  ggtitle("Smoke10: Cumulative") +
+  ggtitle("Respiratory with smoke 10 as effect modifier") +
   ryan_theme +
   theme(panel.grid.major.x = element_blank(),
         panel.grid.major.y = element_line(linetype = "dotted"),
@@ -264,28 +281,84 @@ plot <- ggplot(cumulative_results, aes(x=time, y=estimate)) +
 print(plot)
 ```
 
-My quick take on these results with smoke 10 variable is that smoke may not increase the risk until a day or two after exposure for asthma or COPD, but the longer the smoke is present, the risk increases pretty drastically. 
+My quick take on these results with smoke 10 variable as an effect modifier is that variations in county-level PM~2.5~ when no smoke is present in the county are inversely associated with the rate of respiratory hospitalizations admitted through the emergency room. Although I'd interpret this as no association rather than a protective effect of increasing PM~2.5~ on population respiratory hospitalizations. On smoke days, a 10 ug/m^3^ increase in PM~2.5~ on the same day and the previous day or two of exposure is associated with an increase in the rate of COPD and respiratory hospitalizations. Asthma may take up to a week of prolonged increases in PM~2.5~ exposure on smoke days.
 
-#### Smoke 15
+The difference in the lagged responses on smoke vs non-smoke is an odd observation. I'm going to look at cardiovascular outcomes and using the slightly more strict definition of a smoke day as the effect modifier.
+
+##### Cumulative Effect of PM~2.5~ on Cardiovascular Outcomes
+
+I've left out the binary smoke basis because I'm not sure if has a useful interpretation here when PM~2.5~ is included.
+```{r dl_smk10_cvd_results}
+# filter to smoke 10 results
+cvd_cumulative_results <- dl_results %>% 
+  filter(exposure == "smoke10_hms" & type == "cumulative" & smoke != "smk" &
+    outcome %in% c("cvd", "arrhythmia", "cereb_vas", "hf", "ihd")) %>% 
+  mutate(strata = ifelse(smoke == "pm_smk", "Smoke", "No Smoke"),
+    outcome_full = case_when(outcome == "cvd" ~ "Cardiovascular",
+                             outcome == "arrhythmia" ~ "Arrhythmia",
+                             outcome == "cereb_vas" ~ "Cerebrovascular",
+                             outcome == "hf" ~ "Heart Failure",
+                             outcome == "ihd" ~ "Ischemic Heart Disease"),
+    out_strata = factor(paste0(outcome_full, "\n ", strata), 
+      levels = c("Cardiovascular\n No Smoke", "Cardiovascular\n Smoke",
+                 "Arrhythmia\n No Smoke", "Arrhythmia\n Smoke",
+                 "Ischemic Heart Disease\n No Smoke", 
+                 "Ischemic Heart Disease\n Smoke",
+                 "Heart Failure\n No Smoke", "Heart Failure\n Smoke",
+                 "Cerebrovascular\n No Smoke", "Cerebrovascular\n Smoke")))
+
+# plot
+plot <- ggplot(cvd_cumulative_results, aes(x=time, y=estimate)) +
+  geom_line(colour = "#ff00cc", size = 1) +
+  geom_ribbon(aes(ymin = lower95, ymax = upper95), 
+              fill = "#ff00cc", alpha = 0.3) + 
+  scale_x_continuous(breaks = c(seq(0,7, by=1))) +
+  geom_hline(yintercept = 1, linetype = 2, colour = "red") +
+  facet_wrap(~out_strata, ncol = 2) +
+  ylab("Rate Ratio for a 10 ug/m^3in PM2.5") +
+  xlab("Lagged Days") +
+  ggtitle("Cardiovascular with smoke 10 as a modifier") +
+  ryan_theme +
+  theme(panel.grid.major.x = element_blank(),
+        panel.grid.major.y = element_line(linetype = "dotted"),
+        panel.grid.minor = element_blank())
+
+print(plot)
+```
+
+There may be a lagged association of ischemic heart disease on non-smoke days following multiple days of elevated exposure. Nothing really with smoke PM~2.5~ except maybe a signal with stroke. 
+
+#### Interaction by Smoke 15 Binary Indicator
 
 Plotting the cumulative distributed lag association of the binary smoke > 15 classifier and rate ratio.
 
-```{r dl_smk15_results}
-# filter to smoke 15 results
-cumulative_results <- dl_results %>% 
-  filter(exposure == "smoke15" & type == "cumulative")
+##### Cumulative Effect of PM~2.5~ on Respiratory Outcomes
+
+```{r dl_resp_smk15_results}
+# filter to smoke 10 results
+resp_cumulative_results <- dl_results %>% 
+  filter(exposure == "smoke15_hms" & type == "cumulative" &
+           outcome %in% c("resp", "asthma", "copd") & smoke != "smk") %>% 
+  mutate(strata = ifelse(smoke == "pm_smk", "Smoke", "No Smoke"),
+    outcome_full = case_when(outcome == "resp" ~ "Respiratory",
+                             outcome == "asthma" ~ "Asthma",
+                             outcome == "copd" ~ "COPD"),
+    out_strata = factor(paste0(outcome_full, "\n ", strata), 
+      levels = c("Respiratory\n No Smoke", "Respiratory\n Smoke",
+                 "Asthma\n No Smoke", "Asthma\n Smoke",
+                 "COPD\n No Smoke", "COPD\n Smoke")))
 
 # plot
-plot <- ggplot(cumulative_results, aes(x=time, y=estimate)) +
+plot <- ggplot(resp_cumulative_results, aes(x=time, y=estimate)) +
   geom_line(colour = "#0ed2f7", size = 1) +
   geom_ribbon(aes(ymin = lower95, ymax = upper95), 
               fill = "#b2fefa", alpha = 0.3) + 
   scale_x_continuous(breaks = c(seq(0,7, by=1))) +
   geom_hline(yintercept = 1, linetype = 2, colour = "red") +
-  facet_wrap(~outcome, scales = "free_y") +
-  ylab("Rate Ratio: Exposed to Smoke (Yes vs. No)") +
+  facet_wrap(~out_strata, ncol = 2) +
+  ylab("Rate Ratio for a 10 ug/m^3in PM2.5") +
   xlab("Lagged Days") +
-  ggtitle("Smoke15: Cumulative") +
+  ggtitle("Respiratory with smoke 15 as effect modifier") +
   ryan_theme +
   theme(panel.grid.major.x = element_blank(),
         panel.grid.major.y = element_line(linetype = "dotted"),
@@ -294,28 +367,40 @@ plot <- ggplot(cumulative_results, aes(x=time, y=estimate)) +
 print(plot)
 ```
 
-Similar conclusions to smoke 10 with asthma and COPD, where the effect is most pronounced after a couple days of exposure. There may be an association with myocardial infarction too after 3 or 4 days of exposure.
+Similar associations as the smoke 10 except no association on smoke days with asthma.
 
-#### Smoke Wave
+##### Cumulative Effect of PM~2.5~ on Cardiovascular Outcomes
 
-Plotting the cumulative distributed lag association of the binary smoke wave classifier and rate ratio.
-
-```{r dl_smkwv_results}
-# filter to smoke wave results
-cumulative_results <- dl_results %>% 
-  filter(exposure == "smoke_wave" & type == "cumulative")
+```{r dl_smk15_cvd_results}
+# filter to smoke 10 results
+cvd_cumulative_results <- dl_results %>% 
+  filter(exposure == "smoke15_hms" & type == "cumulative" & smoke != "smk" &
+    outcome %in% c("cvd", "arrhythmia", "cereb_vas", "hf", "ihd")) %>% 
+  mutate(strata = ifelse(smoke == "pm_smk", "Smoke", "No Smoke"),
+    outcome_full = case_when(outcome == "cvd" ~ "Cardiovascular",
+                             outcome == "arrhythmia" ~ "Arrhythmia",
+                             outcome == "cereb_vas" ~ "Cerebrovascular",
+                             outcome == "hf" ~ "Heart Failure",
+                             outcome == "ihd" ~ "Ischemic Heart Disease"),
+    out_strata = factor(paste0(outcome_full, "\n ", strata), 
+      levels = c("Cardiovascular\n No Smoke", "Cardiovascular\n Smoke",
+                 "Arrhythmia\n No Smoke", "Arrhythmia\n Smoke",
+                 "Ischemic Heart Disease\n No Smoke", 
+                 "Ischemic Heart Disease\n Smoke",
+                 "Heart Failure\n No Smoke", "Heart Failure\n Smoke",
+                 "Cerebrovascular\n No Smoke", "Cerebrovascular\n Smoke")))
 
 # plot
-plot <- ggplot(cumulative_results, aes(x=time, y=estimate)) +
-  geom_line(colour = "#0ed2f7", size = 1) +
+plot <- ggplot(cvd_cumulative_results, aes(x=time, y=estimate)) +
+  geom_line(colour = "#ff00cc", size = 1) +
   geom_ribbon(aes(ymin = lower95, ymax = upper95), 
-              fill = "#b2fefa", alpha = 0.3) + 
+              fill = "#ff00cc", alpha = 0.3) + 
   scale_x_continuous(breaks = c(seq(0,7, by=1))) +
   geom_hline(yintercept = 1, linetype = 2, colour = "red") +
-  facet_wrap(~outcome, scales = "free_y") +
-  ylab("Rate Ratio: Exposed to Smoke (Yes vs. No)") +
+  facet_wrap(~out_strata, ncol = 2) +
+  ylab("Rate Ratio for a 10 ug/m^3in PM2.5") +
   xlab("Lagged Days") +
-  ggtitle("Smoke Wave: Cumulative") +
+  ggtitle("Cardiovascular with smoke 15 as a modifier") +
   ryan_theme +
   theme(panel.grid.major.x = element_blank(),
         panel.grid.major.y = element_line(linetype = "dotted"),
@@ -324,32 +409,68 @@ plot <- ggplot(cumulative_results, aes(x=time, y=estimate)) +
 print(plot)
 ```
 
-For smoke-wave, which I'm considering the most reliable estimator of presence of smoke for now, there is an association with all respiratory, asthma, and COPD hospitalizations that increases pretty dramatically the longer there is smoke present. Unlike smoke 15, I do not see an association with MI.
+Results are similar to the smoke 10 cutoff.
+
+### Distribution of PM~2.5~ by Smoke Classifiers
+
+Looking at distribution of PM on smoke and non-smoke days. Starting with the smoke 10 modifier. Limiting the distribution on the high end so it's easier to see.
+
+```{r pm_dist10}
+# subset to colorado and washington
+co_wa_pm <- county_pm_ts %>%
+  filter(state %in% c("Washington", "Colorado")) %>% 
+  rename(pm_diff = pm_smk) %>% 
+  mutate(smoke10_hms = if_else(pm_diff > 10 & month %in% c(3:11) & hms > 0.1,
+                               1, 0),
+         smoke15_hms = if_else(pm_diff > 15 & month %in% c(3:11) & hms > 0.1,
+                               1, 0))
+
+ggplot(data=co_wa_pm, aes(x=pm_krig, group = as.factor(smoke10_hms), 
+                          fill = as.factor(smoke10_hms))) +
+  geom_density(alpha = 0.7) +
+  facet_wrap(~state) +
+  xlim(0, 30) +
+  ggtitle("Distribution of PM2.5 by smoke 10") +
+  ryan_theme
+```
+
+There is some overlap here for Washington where some days that are not necissarily smoke also have high PM~2.5~, suggests that maybe the binary classifier is less-specific than the 15 ug/m^3^ difference cutoff. 
+
+```{r pm_dist15}
+ggplot(data=co_wa_pm, aes(x=pm_krig, group = as.factor(smoke15_hms), 
+                          fill = as.factor(smoke15_hms))) +
+  geom_density(alpha = 0.7) +
+  facet_wrap(~state) +
+  xlim(0, 30) +
+  ggtitle("Distribution of PM2.5 by smoke 15") +
+  ryan_theme
+```
+
+Less overlap here. Results were pretty similar between smoke 10 and smoke 15 though.
 
 ### Conclusions
 
-These results lead to similar conclusions as the 2015 Colorad/Washington time-series and time-stratified case-crossover studies where I think it may take a day or two to notice any increased risk respiratory outcomes (specifically for asthma and COPD) for a population. Association with cardiovascular disease still remains unclear, but if anything, it may suggest that it takes maybe 4 or more days of repeated exposure before the effect manifests. 
+Using county-level counts of events, there is a suggestion that PM~2.5~ increases on smoke days could be associated with an increased risk of certain respiratory hospitalizations. 
+
+Regarding the cumulative effect plots on non-smoke days, they seem counter-intuitive, but if interpreted as no association, they show me the same thing as distributed lag of PM~2.5~ without the interaction. Perhaps there is somethign to the interaction with smoke? I'm not sure if smoke is an effect modifier of PM~2.5~, but I wonder if we could make the argument that one way to estimate the effect of PM~2.5~ on cardiopulmonary outcomes is to model an interaction? This model here seems to be accounting for binary smoke exposure, and PM~2.5~ exposure without smoke. 
+
+The binary smoke variable indicator did not exhibit lagged effects in these models (I have these estimates but did not plot them). This makes sense to me in the context of effect decomposition/mediation, where I wouldn't expect smoke, accounting for the effect of PM~2.5~, would have an effect on rates of outcomes. Something to discuss.
+
+I'm also exporing these models with time-stratified case-crossover designs as well to confirm.
 
 #### Notes and Next Steps: 
 
 - I did not present distributed lag individual days here, but have that information. 
 
-- I did not fit a spline to the exposure series that may account for unmeasured factors that confound the association between outcome counts and smoke days. I do not think it's that essential in the case of binary classifiers of smoke as I think you could consider factors that affect a county being impacted by smoke as almost random in the sense of an assigned exposure. I realize there are atmospheric conditions that govern where smoke goes though, talking about this more from our epi association approach. Besides, I fit splines my last time serieis from 2015 and arrived at similar conclusions.
-
 - County-level population-weigthing is probably subject to a higher degree of misclassification compared to ZIP level, but we only have county-level information on mortality and I see value to keep it at the same spatial unit. 
 
 - I would like to go back and try and define a county impacted by smoke. This would let us look at interactions between continuous PM~2.5~ due to smoke and due to other sources.I need to chat with Bonne, Kate, Jeff, and Emily.
-
-- Interaction with distributed lag analyses seem hard/complicated, but seems possible. Perhaps Ander knows how to fit these. Source here:
-https://www.ncbi.nlm.nih.gov/pmc/articles/PMC3944968/pdf/kxt031.pdf
-
-- Unsure if the mixed model estimates for a Poisson produce stable variance estimates. There is no option for sandwich or quasipoisson models with the GLMER models to handle overdispersion. I don't think this is a huge issue, but I should check some assumptions (mainly mean fips count = fips variance). I think it may be possible to decrease some of the noise with a different model, specifically a Bayesian model. I could run this in STAN or JAGs, but I'm not sure how different my conclusions would be to this. Coincidently, I think the interaction model by Heaton and Peng above use a Bayesian model of some sort. Another reason to chat with Ander.
 
 - Work with Rish and run associations with mortality data; pilot with Colorado mortality data.
 
 - I will try another time-stratified case-crossover to confirm results here. I need to think about referent period. I think with two states and multiple years, I can shorten the referent periods to maybe a month.
 
-- Add Oregon. Jingyang has finished creating the dataframe I requested, but I haven't processed it to a time series yet.
+- Oregon results seemed a little wonky and noisy and I'm not sure I want to include them here since the all payers all claims dataset had some nuances and may yield a different population relative to what we got for Colorado and Washington.
 
 
 
