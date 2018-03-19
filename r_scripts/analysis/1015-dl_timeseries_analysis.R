@@ -25,19 +25,19 @@ ts <- read_csv("./data/health/1015-morbidity_pm_ts.csv") %>%
                                       month %in% c(3:5) ~ "spring",
                                       month %in% c(6:8) ~ "summer",
                                       month %in% c(9:11)~ "fall")),
-         smoke10_hms = if_else(pm_diff > 10 & month %in% c(3:11) & hms > 0.1,
-                               1, 0),
-         smoke15_hms = if_else(pm_diff > 15 & month %in% c(3:11) & hms > 0.1,
-                               1, 0))
+         smoke0_hms = ifelse(pm_diff > 0 & month %in% c(3:10) & hms > 0.5, 1, 0),
+         smoke5_hms = ifelse(pm_diff > 5 & month %in% c(3:10) & hms > 0.5, 1, 0),
+         smoke10_hms = ifelse(pm_diff > 10 & month %in% c(3:10) & hms > 0.5, 1, 0),
+         smoke15_hms = ifelse(pm_diff > 15 & month %in% c(3:10) & hms > 0.5, 1, 0))
 
 # read county pm timeseries
 county_pm_ts <- read_csv("./data/smoke/1015-county_popwt_pm.csv") %>% 
   filter(str_sub(fips,start=1,end=2) %in% c("08", "53")) %>% 
   rename(pm_diff = pm_smk) %>% 
-  mutate(smoke10_hms = if_else(pm_diff > 10 & month %in% c(3:11) & hms > 0.1,
-                        1, 0),
-         smoke15_hms = if_else(pm_diff > 15 & month %in% c(3:11) & hms > 0.1,
-                      1, 0))
+  mutate(smoke0_hms = ifelse(pm_diff > 0 & month %in% c(3:10) & hms > 0.5, 1, 0),
+        smoke5_hms = ifelse(pm_diff > 5 & month %in% c(3:10) & hms > 0.5, 1, 0),
+        smoke10_hms = ifelse(pm_diff > 10 & month %in% c(3:10) & hms > 0.5, 1, 0),
+        smoke15_hms = ifelse(pm_diff > 15 & month %in% c(3:10) & hms > 0.5, 1, 0))
 
 # defining a lag function
 lags <- function(var, n=10){
@@ -51,14 +51,15 @@ lags <- function(var, n=10){
 # output krig pm lag matrix
 pm_lag <- county_pm_ts %>% 
   filter(str_sub(fips,start=1,end=2) %in% c("08", "53")) %>% 
-  select(fips, date, pm_krig, smoke10_hms, smoke15_hms) %>% 
+  select(fips, date, pm_krig, smoke0_hms, smoke5_hms, smoke10_hms, smoke15_hms) %>% 
   arrange(fips, date) %>% 
   group_by(fips) %>% 
-  mutate(., !!!lags(pm_krig,6), !!!lags(smoke10_hms,6), !!!lags(smoke15_hms,6)) 
+  mutate(., !!!lags(pm_krig,6), !!!lags(smoke0_hms,6), !!!lags(smoke5_hms,6),
+         !!!lags(smoke10_hms,6), !!!lags(smoke15_hms,6)) 
 
 # join with morbidity data
 ts_lag <- ts %>%
-  select(-c(pm_krig, smoke10_hms, smoke15_hms)) %>% 
+  select(-c(pm_krig, smoke0_hms, smoke5_hms, smoke10_hms, smoke15_hms)) %>% 
   left_join(pm_lag, by = c("fips", "date")) %>% 
   filter(!is.na(pm_krig_lag6)) %>% 
   arrange(fips, date) %>% 
@@ -72,7 +73,7 @@ pm_mat <- as.matrix(select(ts_lag, contains("pm_krig")))/10
 outcomes <- c("resp", "asthma", "copd", "acute_bronch", "pneum", "cvd", 
               "arrhythmia", "cereb_vas", "hf", "ihd", "mi")
 
-exposure <- c("smoke10_hms", "smoke15_hms")
+exposure <- c("smoke0_hms", "smoke5_hms", "smoke10_hms", "smoke15_hms")
 # expand grid so each outcome/exposure combo is modeled 
 exp_out_combo <- expand.grid(exposure, outcomes) %>% arrange(Var1)
 
@@ -122,15 +123,15 @@ smoke_dl_results <- parApply(cl, exp_out_combo, 1, function(x){
   
   # fit mixed model
   mod <- glmer(as.formula(paste0(outcome,"~pm_smk_basis + pm_nosmk_basis +",
-      "smoke_basis + as.factor(weekend) + temp_f + time_spl +",
+      "smoke_basis + as.factor(weekend) + as.factor(season) + temp_f + time_spl +",
       "offset(log(population)) + (1|fips)")),
                family = "poisson"(link="log"), data = ts_lag,
                control = glmerControl(optimizer = "bobyqa"))
   # test mod
-  # mod <- glm(as.formula(paste0(outcome,"~pm_smk_basis + pm_nosmk_basis +",
-  #    "smoke_basis + offset(log(population))")),
-  #     family = "poisson"(link="log"), data = ts_lag)
-  # summary(mod)
+   # mod <- glm(as.formula(paste0(outcome,"~pm_smk_basis + pm_nosmk_basis +",
+   #    "smoke_basis + weekend +season + time_spl + offset(log(population))")),
+   #     family = "poisson"(link="log"), data = ts_lag)
+   # summary(mod)
   
   # calculate estimates ----
   # output pm basis parameters
@@ -289,7 +290,9 @@ warnings()
 
 # write file ----
 write_csv(smoke_dl_results, paste0("./data/health/",
-  "1015-ts_dl_int_results-2018-03-14.csv"))
+  "1015-ts_dl_int_results-2018-03-19.csv"))
+
+# Note: 2018-03-19 I added smoke0 and smoke5 interaction models
 
 # stop time
 stop <- Sys.time()
