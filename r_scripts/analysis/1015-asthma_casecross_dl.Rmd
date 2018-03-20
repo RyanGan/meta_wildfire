@@ -743,14 +743,24 @@ pm_cat <- pm %>%
   mutate(pm_cat = factor(case_when(pm_krig <= 10 ~ "0-10", 
     pm_krig > 10 & pm_krig <= 20 ~ "10-20",
     pm_krig > 20 & pm_krig <= 50 ~ "20-50",
-    pm_krig > 50 ~ ">50"), levels = c("0-10", "10-20", "20-50", ">50"))) 
+    pm_krig > 50 ~ ">50"), levels = c("0-10", "10-20", "20-50", ">50")),
+    pm_cat0 = ifelse(pm_cat == "0-10", 1, 0),
+    pm_cat1 = ifelse(pm_cat == "10-20", 1, 0),
+    pm_cat2 = ifelse(pm_cat == "20-50", 1, 0),
+    pm_cat3 = ifelse(pm_cat == ">50", 1, 0)) %>% 
+    arrange(fips, date) %>% 
+    group_by(fips) %>% 
+    mutate(., !!!funlag(pm_cat0,6), !!!funlag(pm_cat1,6),
+         !!!funlag(pm_cat2,6), !!!funlag(pm_cat3,6))
+  
 
 # asthma cat
 asthma_cat <- asthma %>% 
-  filter(state %in% c("washington")) %>% 
+  filter(state %in% c("washington", "colorado")) %>% 
   filter(month %in% 4:10) %>% 
   select(-c(pm_krig, smoke10_hms, smoke15_hms)) %>% 
   left_join(pm_cat, by = c("fips", "date")) 
+
 # model
 mod <- clogit(outcome ~ pm_cat + strata(id), asthma_cat)
 # output just odds ratio
@@ -766,4 +776,49 @@ ggplot(plot_df, aes(x=term, y=estimate)) +
   ylab("odds ratio")
 ```
 
-Association looks more or less linear as PM increases. Probably not worth the effort to fit a non-linear distributed lag model.
+Association looks more or less linear as PM increases. I'll try out the distributed lag approach though.
+
+```{r}
+# dummy cat matrix
+pm_cat1_mat <- as.matrix(select(asthma_cat, contains("pm_cat1")))
+pm_cat2_mat <- as.matrix(select(asthma_cat, contains("pm_cat2")))
+pm_cat3_mat <- as.matrix(select(asthma_cat, contains("pm_cat3")))
+
+# lagged basis spline
+exp_b <- ns(0:6, df = 3, intercept = T)
+# lagged dummy cat basis
+p_cat1_b <- pm_cat1_mat %*% exp_b
+p_cat2_b <- pm_cat2_mat %*% exp_b
+p_cat3_b <- pm_cat3_mat %*% exp_b
+
+# lagged clogit
+mod <- clogit(outcome ~ p_cat1_b + p_cat2_b + p_cat3_b + temp_f +
+              strata(id), asthma_cat)
+
+cat_est <- c("p_cat1_b", "p_cat2_b", "p_cat3_b") %>% 
+  map_dfr(~distribute_that_lag(mod, strata = .)) %>% 
+  mutate(pm_strata = factor(
+    case_when(strata == "p_cat1_b" ~ "10-20 ug/m^3",
+              strata == "p_cat2_b" ~ "20-50 ug/m^3",
+              strata == "p_cat3_b" ~ ">50 ug/m^3"), 
+    levels = c("10-20 ug/m^3", "20-50 ug/m^3", ">50 ug/m^3")))
+
+# plot results
+plot <- ggplot(cat_est, aes(x=time, y=odds_ratio)) +
+  geom_line(colour = "blue", size = 1) +
+  geom_ribbon(aes(ymin = lower_95, ymax = upper_95), 
+              fill = "blue", alpha = 0.3) + 
+  scale_x_continuous(breaks = c(seq(0,7, by=1))) +
+  geom_hline(yintercept = 1, linetype = 2, colour = "red") +
+  facet_wrap(~pm_strata, scales = "free_y") +
+  ylab(expression("Odds Ratio: Strata vs 0-10 ug/m^3 strata")) +
+  xlab("Lagged Days") +
+  ggtitle("Risk for Asthma at varying PM2.5 Category Model") +
+  theme(panel.grid.major.x = element_blank(),
+        panel.grid.major.y = element_line(linetype = "dotted"),
+        panel.grid.minor = element_blank()) +
+  theme_minimal()
+
+print(plot)
+```
+
