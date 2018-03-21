@@ -13,9 +13,14 @@
 library(tidyverse)
 library(lubridate)
 library(case.crossover)
+library(parallel)
 
-# read mortality data in
-read_path <- paste0("../colorado_wildfire/data/health/co_death_2016.csv") 
+# load Rdata vector of outcomes ----
+load("./data/health/icd10_outcome.RData")
+
+# read mortality data -----
+# changed this path to read on the server
+read_path <- paste0("./data/health/co_death_1016.csv") 
 
 co_mortality_2010_2016 <- read_csv(read_path) %>% 
   mutate(date_of_death = as.Date(dod, format = "%m%d%Y"),
@@ -49,7 +54,7 @@ co_mortality_2010_2016 <- read_csv(read_path) %>%
             str_sub(acme9, 1, 1) == "J" | str_sub(acme10, 1, 1) == "J" |
             str_sub(acme11, 1, 1) == "J" ~ 1),
          cod_resp = ifelse(is.na(resp_ind), 0, 1),
-         ucod_rep = ifelse(str_sub(ucod, 1, 1) == "J", 1, 0),
+         ucod_resp = ifelse(str_sub(ucod, 1, 1) == "J", 1, 0),
          # find cause of death cvd
          cvd_ind = case_when(str_sub(ucod, 1, 1) == "I" |
             str_sub(acme1, 1, 1) == "I" | str_sub(acme3, 1, 1) == "I" | 
@@ -64,17 +69,51 @@ co_mortality_2010_2016 <- read_csv(read_path) %>%
 # I'm only going to create dataframes for respiratory and cardiovascular major
 # underlying cause of death ICD10 codes since I think Rish presents data this way
 # Note, I could look at subsets of outcomes
-copd <- co_mortality_2010_2016 %>% 
-  filter(str_sub(ucod, 1, 3)== "J44")
+
+# subsetting copd underlying cause of death to evaulate while process is running
+# commenting the following steps out since i don't need to run it each time
+# copd <- co_mortality_2010_2016 %>% 
+#   filter(str_sub(ucod, 1, 3)== "J44")
+# 
+# copd_casecross <- casecross(data=copd, id = "vsid", date = "date_of_death", 
+#   period = "month", covariate = c("ucod", "age", "sex", "race_cat", 
+#                                   "hisp_cat", "zip", "fips", "wrfgrid_id"))
+# 
+# # write copd casecrossover
+# write_csv(copd_casecross, "./data/health/1015-copd_mortality_cc.csv")
+
 # time-stratified case-crossover ----
-start_time <- Sys.time()
-casecross_list <- c("J", "I") %>% 
-  # create lists of outcome dataframes
-  map(~filter(co_mortality_2010_2016, str_sub(ucod, 1, 1) %in% .)) %>% 
-  # apply ts casecross over function and join with pm data
-  map(~casecross(data = ., id = "vsid", date = "date_of_death", period = "month", 
-    covariate = c("ucod", "age", "sex", "race_cat", "hisp_cat", "zip", 
-                  "fips", "wrfgrid_id"))) 
+# parallel distributed lag computing ----
+# set up cluster of 8 cores to parallelize models
+cores <- parallel::detectCores()
+# check to see if cores detected
+print(cores)
+cl <- makeCluster(cores)
+# check cluster
+print(cl)
+
+# load packages on each processor of the node/cluster
+clusterCall(cl, function() c(library(tidyverse), library(lubridate),
+                             library(case.crossover)))
+
+# export new set of objects to global objects to cluster
+clusterExport(cl, c("co_mortality_2010_2016", "icd10_outcomes"), 
+              envir = .GlobalEnv)
+
+# Distributed lag association for smoke ----------------------------------------
+# start time
+start <- Sys.time()
+
+# distributed lag function
+casecross_list <- parLapply(cl, icd10_outcomes, function(x){
+  # filter co_mortality by underlying cause of death in string of icd10 codes
+  df <- filter(co_mortality_2010_2016, str_sub(ucod, 1, 3) %in% x)
+  # apply custom case.cross function
+  df_cc <- casecross(data = df, id = "vsid", date = "date_of_death", 
+    period = "month", covariate = c("ucod", "age", "sex", "race_cat", 
+                                    "hisp_cat", "zip", "fips", "wrfgrid_id"))
+  })
+
 stop_time <- Sys.time()
 time <- stop_time - start_time
 print(time)
