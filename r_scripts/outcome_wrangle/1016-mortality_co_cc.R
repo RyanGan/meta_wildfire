@@ -4,10 +4,9 @@
 # Date Created: 2018-03-12
 # ------------------------------------------------------------------------------
 
-# This script combines estimated population-weighted PM2.5, temperature, HMS,
-# and air quality index data to create a time series from 2010 to 2015.
-# I am considering extending this to 2006 to 2010; I would need to process
-# temperature data.
+# This script creates monthly time-stratified case-crossover dataframes for 
+# colorado mortality outcomes from 2010 to 2016.
+# Note: I may move this to the Colorado wildfire repo.
 
 # libraries -----
 library(tidyverse)
