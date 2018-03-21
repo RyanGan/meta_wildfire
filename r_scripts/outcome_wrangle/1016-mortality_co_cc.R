@@ -114,8 +114,8 @@ casecross_list <- parLapply(cl, icd10_outcomes, function(x){
                                     "hisp_cat", "zip", "fips", "wrfgrid_id"))
   })
 
-stop_time <- Sys.time()
-time <- stop_time - start_time
+stop <- Sys.time()
+time <- stop - start
 print(time)
 
 # check first observation of asthma
