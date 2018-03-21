@@ -117,3 +117,19 @@ casecross_list <- parLapply(cl, icd10_outcomes, function(x){
 stop_time <- Sys.time()
 time <- stop_time - start_time
 print(time)
+
+# check first observation of asthma
+print(head(casecross_list[[2]]))
+
+# save casecross list----
+save(casecross_list, file = "./data/health/co_morality_cc_list.RData")
+
+# stop time
+stop <- Sys.time()
+time <- stop - start
+# print time
+print(time)
+
+# stop cluster
+stopCluster(cl)
+
