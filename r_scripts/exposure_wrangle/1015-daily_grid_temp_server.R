@@ -87,7 +87,7 @@ parSapply(cl, temp_list, function(meow){
   print(temp_df[1:5, 1:5])
   
   # write name 
-  write_name <- paste0("./data/smoke/air_temp_2m/co_air_temp/",
+  write_name <- paste0("./data/smoke/co_air_temp/",
                        year,"-co_grid_temp.csv")
   
   # write final dataset to air temp file
@@ -101,5 +101,5 @@ parSapply(cl, temp_list, function(meow){
 stopCluster(cl)
 
 # check to see if files were created
-list.files("./data/smoke/air_temp_2m/county_air_temp/", pattern = ".csv")
+list.files("./data/smoke/co_air_temp/", pattern = ".csv")
 
