@@ -40,7 +40,7 @@ temp_path <- paste0("./data/smoke/air_temp_2m/")
 # create list of temp files
 temp_nc_files<- list.files(temp_path)
 # print temp files
-print(temp_list)
+print(temp_nc_files)
 
 # set up cluster of 6 cores to parallelize across each .nc file 
 cl <- makeCluster(6)
@@ -54,7 +54,7 @@ clusterExport(cl, c("temp_nc_files", "r", "temp_coords", "grid_coords"),
               envir = .GlobalEnv)
 
 # parallel sapply nc read and write function over list of .nc files
-parSapply(cl, temp_list, function(meow){
+parSapply(cl, temp_nc_files, function(meow){
   
   # open nc connection
   temp_nc <- nc_open(paste0(temp_path, meow))
