@@ -7,7 +7,6 @@ editor_options:
 output:
   html_document:
     df_print: paged
-
 ---
 
 ```{r setup, include=F}
