@@ -50,7 +50,8 @@ clusterCall(cl, function() c(library(tidyverse), library(ncdf4),
                              library(raster)))
 
 # export global sf objects and empty tibble to each core
-clusterExport(cl, c("temp_nc_files", "r", "temp_coords", "grid_coords"), 
+clusterExport(cl, c("temp_nc_files", "r", "temp_coords", "grid_coords", 
+                    "temp_path"), 
               envir = .GlobalEnv)
 
 # parallel sapply nc read and write function over list of .nc files
