@@ -95,7 +95,7 @@ parSapply(cl, temp_nc_files, function(meow){
                        year,"-co_grid_temp.csv")
   
   # write final dataset to air temp file
-  write_csv(final_df, path = write_name)
+  write_csv(temp_df, path = write_name)
   
   # close nc connection
   nc_close(temp_nc)
