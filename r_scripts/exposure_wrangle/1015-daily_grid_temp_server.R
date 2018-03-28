@@ -81,8 +81,11 @@ parSapply(cl, temp_nc_files, function(meow){
   temp_df <- data.frame(co_temp_mat)
   # assign column names of dates
   colnames(temp_df) <- date
+  # output grid ids
+  GRID_ID <- grid_coords$GRID_ID
   # bind in grid_id column
   temp_df <- cbind(GRID_ID, temp_df)
+  
   
   # print first obs of temp_df
   print(temp_df[1:5, 1:5])
