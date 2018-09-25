@@ -1,0 +1,276 @@
+---
+title: "Colorado Respiratory Morbidity Association"
+author: "Ryan Gan"
+date: "9/24/2018"
+output: html_document
+---
+
+## Introduction
+
+This is an R Markdown script prepared for Sheryl that contain pilot analyses evaluating a binary classifier of smoke exposure and the likelihood for a cardiopulmonary hospitalization (inpatient admission) admitted via the emergency room during the wildfire season of 2015 (May to September). The study population is limited to Colorado. Note, it is not limited to Front Range communities, so there may be some concern with exposure misclassification in areas without a PM2.5 monitor. The specific study design is the time-stratified case-crossover design with a referent period of 1-month.
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Load libraries required to analyze data.
+
+```{r library, echo=F, message=F}
+library(tidyverse)
+library(survival)
+library(splines)
+```
+
+Load time-stratified case-crossover morbidity data.
+
+```{r list_load, echo=F, message=F}
+load('../../data/health/2015-morbidity_casecross_list.RData')
+```
+
+Filter list to only Colorado outcomes and remove larger list to save space. Creating some lagged variables to evaluate distributed lag relationships. I'm only looking at same-day to lagged day of 2. The rational for this is that smoke from the large fires or transported smoke in Colorado were not elevated as long as Washington or Oregon. I think a couple days should be adequate for a pilot evaluation.
+
+```{r list_setup, echo=F, message=F}
+co_list <- ts_casecross_list %>% 
+  map(~filter(., state == 'colorado') %>% 
+       # add lagged smoke vars
+       mutate(smoke5_lag1 = ifelse(gwr_smk_lag1 >= 0.5, 1, 0),
+              smoke5_lag2 = ifelse(gwr_smk_lag2 >= 0.5, 1, 0),
+              smoke5_lag3 = ifelse(gwr_smk_lag3 >= 0.5, 1, 0),
+              smoke10_lag1 = ifelse(gwr_smk_lag1 >= 1, 1, 0),
+              smoke10_lag2 = ifelse(gwr_smk_lag2 >= 1, 1, 0),
+              smoke10_lag3 = ifelse(gwr_smk_lag3 >= 1, 1, 0),
+              smoke15_lag1 = ifelse(gwr_smk_lag1 >= 1.5, 1, 0),
+              smoke15_lag2 = ifelse(gwr_smk_lag2 >= 1.5, 1, 0),
+              smoke15_lag3 = ifelse(gwr_smk_lag3 >= 1.5, 1, 0)))
+```
+
+Same-day association for respiratory outcomes looking at smoke > 10 ug/m^3. I'm evaluating a cutoff of > 10 ug/m^3 because I think this better-captures smoke than a cutoff of >5, but it's also not as restrictively high as >15 ug/m^3. I think there are few events at that high cutoff. I will throughly explore this in the Colorado paper.
+
+```{r sameday_results, echo=F, message=F}
+# extract names
+outcomes <- c('All Respiratory', 'Asthma', 'COPD', 'Acute Bronchitis',
+              'Pneumonia', 'All CVD', 'Arrhythmia', 'Cerebrovascular',
+              'Heart Failure', 'Ischemic Heart Disease', 
+              'Myocardial Infarction')
+# outcome order
+out_order <- c('All Respiratory', 'Asthma', 'COPD', 'Acute Bronchitis',
+              'Pneumonia', 'All CVD', 'Arrhythmia', 'Cerebrovascular',
+              'Heart Failure', 'Ischemic Heart Disease', 
+              'Myocardial Infarction')
+
+same_day <- co_list %>% 
+  map_dfr(., function(df){
+    result <- broom::tidy(clogit(outcome ~ smoke10 + strata(identifier),
+                                 data = df)) %>% 
+      select(term, estimate, conf.low, conf.high) %>% 
+      mutate_at(vars(estimate:conf.high), exp) 
+  }) %>% 
+  bind_cols(data.frame(outcomes), .) %>% 
+  mutate(outcome = forcats::fct_relevel(outcomes, out_order),
+         group = as.factor(if_else(outcomes %in% out_order[1:5],
+          "Respiratory", "Cardiovascular")))
+```
+
+## Same-day plot all outcomes.
+
+```{r sameday_plot, echo=F, message=F}
+# plot
+plot <- ggplot(data=same_day, aes(x=outcome, y = estimate, colour = group)) +
+  geom_point() +
+  geom_errorbar(aes(ymin=conf.low, ymax=conf.high), width = 0.3) +
+  scale_color_manual("Cardiopulmonary", values = c("#ff00cc", "darkblue")) +
+  geom_hline(yintercept = 1, linetype = "dashed", colour = "red") +
+  ylab(expression(paste("Odds Ratio: Smoke PM"[2.5], " > 10 ug/m"^3))) +
+  xlab("Outcome") +
+  theme_bw()+
+  theme(panel.grid.major.x = element_blank(),
+        panel.grid.major.y = element_line(linetype = "dotted"),
+        panel.grid.minor = element_blank(),
+        axis.text.x = element_text(angle = 90, hjust=0.95, vjust = 0.75))
+
+print(plot)
+```
+
+A couple notes for Sheryl in regard to this analysis that is Colorado only compared to the pooled Colorado and Washington:
+
+1. I think the impact of smoke in Colorado was not as extreme as Washington so I need to think more about appropriate cutoffs. I think > 5 might be too low and capture a lot of anthropogenic events and > 15 might be too high for a lot of Colorado communities and would reduce the number of events in the exposed gorup. I settled on > 10. 
+
+2. I think there may be some difference in response based on lagged days which I'll get in to below.
+
+## Same-day association respiratory only
+
+Sheryl has requested a respiratory hosptialization only plot since the grant is primarily focused on respiratory outcomes. 
+
+```{r resp_only, echo=F, message=F}
+# plot
+plot <- ggplot(data=filter(same_day, group == 'Respiratory'), 
+               aes(x=outcome, y = estimate)) +
+  geom_point(color='darkblue') +
+  geom_errorbar(aes(ymin=conf.low, ymax=conf.high), width = 0.3, 
+                color = 'darkblue') +
+  geom_hline(yintercept = 1, linetype = "dashed", colour = "red") +
+  ylab(expression(paste("Odds Ratio: Smoke PM"[2.5], " > 10 ug/m"^3))) +
+  xlab("Outcome") +
+  theme_bw()+
+  theme(panel.grid.major.x = element_blank(),
+        panel.grid.major.y = element_line(linetype = "dotted"),
+        panel.grid.minor = element_blank(),
+        axis.text.x = element_text(angle = 90, hjust=0.95, vjust = 0.75))
+
+print(plot)
+```
+
+## Distributed lag results
+
+Same-day associations show null or no assoication with respiratory hospitalizations when smoke is >10 ug/m^3. Hypothesis here could be that people are modifying their behavior and trying to avoid smoke or heeding air quality warnings. This would be a reason to look at lagged associations.I've used 2 degrees of freedom splines since there aren't that may days to lag over.
+
+```{r dl_function, echo=F, message=F}
+distribute_that_lag <- function(lag_mod, strata) {
+  # output pm basis estimates
+  parms <- broom::tidy(lag_mod) %>% 
+    filter(stringr::str_detect(term, strata)) %>% 
+    select(estimate) %>% 
+    as_vector()
+  # output estimate names for cov matrix
+  names <- stringr::str_subset(names(lag_mod$coefficients), strata)
+  # define lagged basis spline if it doesn't exist
+  exp_b <- ns(0:2, df = 2, intercept = T)
+  # estimate associations
+  est <- exp_b %*% parms
+  # estimate standard error for each interval
+  # time variable
+  time <- ((rep(1:length(est))-1))
+  # covariance matrix for knots 
+  cov_mat <- as.matrix(vcov(lag_mod))[names, names]
+  # estimate variance of spline
+  var <- exp_b %*% cov_mat %*% t(exp_b)
+  # estimate lag ----
+  # estimate standard error for each lag day for smoke
+  l_se <- sqrt(diag(var))
+  # calculate lower and upper bound for smoke
+  l_est_l95 <- est + (l_se*qnorm(1-0.975))
+  l_est_u95 <- est + (l_se*qnorm(0.975))
+  l_type <- "lag"
+  # lag dataframe
+  l_df <- data.frame(strata, l_type, time, 
+                     exp(est), exp(l_est_l95), exp(l_est_u95), 
+                     row.names = NULL) 
+  # assign column names
+  colnames(l_df) <- c("strata", "type", "time", 
+                      "odds_ratio", "lower_95", "upper_95")
+  # cumulative estimates
+  c_est <- sapply(seq_along(est), function(x){
+    sum(est[1:x])
+  })
+  # stderr cumulative effect smk
+  c_se <- sapply(seq_along(c_est), function(y){
+    sqrt(sum(var[1:y,1:y]))
+  })
+  # estimate 95% CI
+  c_l95 <- c_est+(c_se*qnorm(1-0.975))
+  c_u95 <- c_est+(c_se*qnorm(0.975))
+  # type
+  c_type <- "cumulative"
+  # return dataframe
+  c_df <- data.frame(strata, c_type, time, exp(c_est), 
+                     exp(c_l95), exp(c_u95), row.names = NULL) 
+  # assign column names
+  colnames(c_df) <- c("strata", "type", "time", 
+                      "odds_ratio", "lower_95", "upper_95")
+  # bind lagged and cumulative 
+  lag_est <- rbind(l_df, c_df) %>% 
+    mutate(strata = as.character(strata),
+           type = as.character(type))
+  # return lagged estimate
+  return(lag_est)
+} # end lag estimate function
+```
+
+
+```{r dl_results, echo=F, message=F}
+out_rep <- rep(outcomes, each = 6)
+
+dl_results  <- lapply(co_list, function(x){
+  # output dataframe from list
+  data <- x %>% 
+    mutate(date = as.Date(date),
+           outcome = as.numeric(as.character(outcome))) %>%
+    # remove missing lagged data
+    filter(!is.na(smoke10_lag2))
+
+  # create lagged matrix
+  pm_mat <- as.matrix(select(data, smoke10, smoke10_lag1, smoke10_lag2))
+
+  # define lagged basis spline
+  exp_b <- splines::ns(0:(ncol(pm_mat)-1), df = 2, intercept = T)
+  # pm basis
+  pm_basis <- pm_mat %*% exp_b
+  # run lagged model
+  lag_mod <- clogit(outcome ~ pm_basis  + strata(identifier), data = data)
+
+  # estimate lag estimate
+  lag_est <- distribute_that_lag(lag_mod, strata = "pm") 
+  return(lag_est)
+  }) %>%  #end lappply
+  # bind rows
+  map_dfr(.,rbind) %>% 
+  # bind in outcome names
+  bind_cols(data.frame(out_rep), .)
+```
+
+## Cumulative effect over 0 to 2 lagged days of smoke exposure > 10 ug/m^3
+
+Here is the cumulative effect of 3 days of smoke exposure > 10 ug/m^3 on cardiopulmonary respiratory hospitalizations. The relationship is similar to the same day association in that there aren't really any 'significant' respiratory associations, but there is an increased risk for asthma hospitalizations. There are also associations with some cardiovascular outcomes.
+
+I'd say that all respiratory and pneumonia might have something strange going on.
+
+```{r cumulative_results, echo=F, message=F}
+c_results <- dl_results %>% 
+  filter(type == 'cumulative' & time == 2) %>% 
+  mutate(out_rep = forcats::fct_relevel(out_rep, out_order),
+         group = as.factor(if_else(out_rep %in% out_order[1:5],
+          "Respiratory", "Cardiovascular")))
+
+# plot
+plot <- ggplot(data=c_results, aes(x=out_rep, y = odds_ratio, 
+                                   colour = group)) +
+  geom_point() +
+  geom_errorbar(aes(ymin=lower_95, ymax=upper_95), width = 0.3) +
+  scale_color_manual(values = c("#ff00cc", "darkblue")) +
+  geom_hline(yintercept = 1, linetype = "dashed", colour = "red") +
+  ylab(expression(paste("Odds Ratio: Smoke PM"[2.5], " > 10 ug/m"^3))) +
+  xlab("Outcome") +
+  theme_bw()+
+  theme(panel.grid.major.x = element_blank(),
+        panel.grid.major.y = element_line(linetype = "dotted"),
+        panel.grid.minor = element_blank(),
+        axis.text.x = element_text(angle = 90, hjust=0.95, vjust = 0.75))
+
+print(plot)
+```
+
+## Cumulative Lagged Assoication Respiratory-specific.
+
+```{r echo = F, message = F}
+# plot
+plot <- ggplot(data = filter(dl_results, type == 'cumulative' & 
+                               time == 2 & (out_rep %in% out_order[1:5])), 
+               aes(x=out_rep, y = odds_ratio)) +
+  geom_point(color='darkblue') +
+  geom_errorbar(aes(ymin=lower_95, ymax=upper_95), width = 0.3, 
+                color = 'darkblue') +
+  geom_hline(yintercept = 1, linetype = "dashed", colour = "red") +
+  ylab(expression(paste("Odds Ratio: Smoke PM"[2.5], " > 10 ug/m"^3))) +
+  xlab("Outcome") +
+  theme_bw()+
+  theme(panel.grid.major.x = element_blank(),
+        panel.grid.major.y = element_line(linetype = "dotted"),
+        panel.grid.minor = element_blank(),
+        axis.text.x = element_text(angle = 90, hjust=0.95, vjust = 0.75))
+
+print(plot)
+```
+
+Sheryl, a couple things about this quick analysis is that it only contains results from 2015 as I had these exposure data before I had the rest of the smooth krig values from Kate. I will include all years when I analyze Colorado. However, those time-stratified case-crossover dataframes were not readily available and I'll need to make those. 
+
+I can include all years if that's of interst though. Let me know.
